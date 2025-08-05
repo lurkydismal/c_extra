@@ -1,0 +1,25 @@
+# Vim
+**/*~
+**/*.swp
+**/.*~
+**/.*.swp
+
+# glad
+glad
+
+# Profiling
+**/*.gc*
+**/*.info
+**/coverage*
+**/*.prof*
+
+# Binary
+**/*.o
+**/**out**
+**/*vgcore*
+**/*.data
+***/compile_commands.json
+**/.cache
+
+# In-progress
+Style_Guide.md
