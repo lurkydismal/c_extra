@@ -4,9 +4,6 @@
 **/.*~
 **/.*.swp
 
-# glad
-glad
-
 # Profiling
 **/*.gc*
 **/*.info
@@ -20,6 +17,3 @@ glad
 **/*.data
 ***/compile_commands.json
 **/.cache
-
-# In-progress
-Style_Guide.md
