@@ -8,7 +8,9 @@
 #include <clang/Tooling/CommonOptionsParser.h>
 #include <clang/Tooling/CompilationDatabase.h>
 #include <clang/Tooling/Tooling.h>
+#include <llvm/Support/raw_ostream.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -189,15 +191,38 @@ public:
     auto CreateASTConsumer( CompilerInstance& _ci, StringRef _file )
         -> std::unique_ptr< ASTConsumer > override {
         _theRewriter.setSourceMgr( _ci.getSourceManager(), _ci.getLangOpts() );
+
         return std::make_unique< SFuncASTConsumer >( _theRewriter );
     }
+
     void EndSourceFileAction() override {
         // Write the rewritten buffer to output file
         SourceManager& l_sm = _theRewriter.getSourceMgr();
+
+        FileID l_mainFileId = l_sm.getMainFileID();
+        StringRef l_inputFile =
+            l_sm.getFileEntryForID( l_mainFileId )->tryGetRealPathName();
+
+        llvm::SmallString< FILENAME_MAX > l_filePath;
+        llvm::sys::path::append( l_filePath, "." );
+        llvm::sys::path::append( l_filePath,
+                                 llvm::sys::path::filename( l_inputFile ) );
+
         std::error_code l_ec;
+
         // TODO: Write to input file in-place  or .fileName
-        llvm::raw_fd_ostream l_outFile( "t/2.c", l_ec, llvm::sys::fs::OF_None );
-        _theRewriter.getEditBuffer( l_sm.getMainFileID() ).write( l_outFile );
+        llvm::raw_fd_ostream l_outFile( l_filePath, l_ec,
+                                        llvm::sys::fs::OF_None );
+
+        if ( l_ec ) {
+            // Function file:line | message
+            llvm::errs() << __FUNCTION__ << " " << __FILE_NAME__ << ":"
+                         << __LINE__ << " | " << l_ec.message() << "\n";
+
+            return;
+        }
+
+        _theRewriter.getEditBuffer( l_mainFileId ).write( l_outFile );
     }
 
 private:
