@@ -20,6 +20,28 @@ using namespace clang;
 using namespace clang::tooling;
 using namespace clang::ast_matchers;
 
+class MacroNameReplacer : public PPCallbacks {
+public:
+    MacroNameReplacer( Rewriter& _r, SourceManager& _sm )
+        : _theRewriter( _r ), _sm( _sm ) {}
+
+    void MacroExpands( const Token& _macroNameTok,
+                       const MacroDefinition& _md,
+                       SourceRange _range,
+                       const MacroArgs* _args ) override {
+        SourceLocation l_loc = _macroNameTok.getLocation();
+        StringRef l_macroName = _macroNameTok.getIdentifierInfo()->getName();
+
+        // Replace macro usage with "MACRO_NAME"
+        _theRewriter.ReplaceText( l_loc, l_macroName.size(),
+                                  "\"" + l_macroName.str() + "\"" );
+    }
+
+private:
+    Rewriter& _theRewriter;
+    SourceManager& _sm;
+};
+
 class SFuncHandler : public MatchFinder::MatchCallback {
 public:
     SFuncHandler( Rewriter& _r ) : _theRewriter( _r ) {}
@@ -115,7 +137,7 @@ public:
             if ( l_fieldName.empty() )
                 continue;
 
-            // std::string typeName = field->getType().getAsString();
+            std::string l_typeName = l_field->getType().getAsString();
             std::string l_fieldRef;
 
             if ( l_pointerPassed ) {
@@ -133,7 +155,7 @@ public:
                     .append( ")" );
             }
 
-            // callbkName( "fieldName", /* fieldType,*/ &(variable->field),
+            // callbackName( "fieldName", fieldTypeAsString, &(variable->field),
             // offsetof( structType, field ), sizeof( ( (structType*) 0)->field
             // ) );
             l_replacementText.append( l_indent )
@@ -142,7 +164,8 @@ public:
                 .append( "\"" )
                 .append( l_fieldName )
                 .append( "\", " ) // "fieldName",
-                //.append(type_name).append(", ")              // fieldType
+                .append( l_typeName )
+                .append( ", " ) // fieldType
                 .append( l_fieldRef )
                 .append( ", " ) // &(variable->field),
                 .append( "offsetof(" )
@@ -203,13 +226,30 @@ private:
     MatchFinder _matcher;
 };
 
-class RewriteFrontendAction : public ASTFrontendAction {
+class RewritionFrontendAction : public ASTFrontendAction {
 public:
     auto CreateASTConsumer( CompilerInstance& _ci, StringRef _file )
         -> std::unique_ptr< ASTConsumer > override {
         _theRewriter.setSourceMgr( _ci.getSourceManager(), _ci.getLangOpts() );
 
         return std::make_unique< SFuncASTConsumer >( _theRewriter );
+    }
+
+    void ExecuteAction() override {
+        CompilerInstance& l_ci = getCompilerInstance();
+        Preprocessor& l_pp = l_ci.getPreprocessor();
+        SourceManager& l_sm = l_ci.getSourceManager();
+
+        _theRewriter.setSourceMgr( l_sm, l_ci.getLangOpts() );
+        l_pp.addPPCallbacks(
+            std::make_unique< MacroNameReplacer >( _theRewriter, l_sm ) );
+
+        // Run normal compilation to trigger macro expansion
+        ASTFrontendAction::ExecuteAction();
+
+        // Output modified code
+        _theRewriter.getEditBuffer( l_sm.getMainFileID() )
+            .write( llvm::outs() );
     }
 
     // TODO: Improve
@@ -269,10 +309,19 @@ auto main( int _argumentCount, char* _argumentVector[] ) -> int {
             g_compilationSourceDirectory, g_compileArgs );
         ClangTool l_tool( l_compilationDatabase, g_sources );
 
-        auto l_rewriteFactory =
-            newFrontendActionFactory< RewriteFrontendAction >();
-        l_returnValue = l_tool.run( l_rewriteFactory.get() );
+        // TODO: #for, #repeat
+#if 0
+        auto l_preprocessionFactory = newFrontendActionFactory< EvaluationFrontendAction >();
+        l_returnValue = l_tool.run( l_preprocessionFactory.get() );
+#endif
 
+        // TODO: iterate_struct, iterate_enum, iterate_union, iterate_arguments,
+        // iterate_annotation, iterate_scope
+        auto l_rewritionFactory =
+            newFrontendActionFactory< RewritionFrontendAction >();
+        l_returnValue = l_tool.run( l_rewritionFactory.get() );
+
+        // TODO: constinit, consteval, constexpr
 #if 0
         auto l_evaluationFactory = newFrontendActionFactory< EvaluationFrontendAction >();
         l_returnValue = l_tool.run( l_evaluationFactory.get() );

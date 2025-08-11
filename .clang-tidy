@@ -1,5 +1,4 @@
 ---
-# Turn off everything, then re-enable only the checks you want:
 Checks: >
   clang-analyzer-*
   ,bugprone-*
@@ -20,7 +19,7 @@ Checks: >
   ,-modernize-macro-to-enum
   ,readability-identifier-naming
 
-# Never try to re-format your code:
+# Never try to re-format:
 FormatStyle: none
 
 # Which headers to lint ( empty = all ):
