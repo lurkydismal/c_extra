@@ -5,7 +5,7 @@ set(LLVM_LINK_COMPONENTS
 add_clang_executable(c_extra
     main.cpp
     arguments_parse.cpp
-    rewrition_frontend.cpp
+    cextra_frontend.cpp
     iterate_struct.cpp
 )
 

@@ -3,11 +3,31 @@
 #include <argp.h>
 
 std::string g_compilationSourceDirectory;
-std::vector< std::string > g_compileArgs;
+// TODO: Improve
+std::vector< std::string > g_compileArguments = {
+    "-std=gnu23",
+
+    // Default options
+    "-isystem",
+    "/usr/lib/clang/20/include",
+    "-isystem",
+    "/usr/local/include",
+    "-isystem",
+    "/usr/bin/../lib64/gcc/x86_64-pc-linux-gnu/15.1.1/../../../../"
+    "x86_64-pc-linux-gnu/include",
+    "-isystem",
+    "/include",
+    "-isystem",
+    "/usr/include",
+};
+
 std::vector< std::string > g_sources;
 
+// Flags
+bool g_needEditInPlace = false;
+
 constexpr const char* g_applicationIdentifier = "c_extra";
-constexpr const char* g_applicationVersion = "0.1";
+constexpr const char* g_applicationVersion = "0.0";
 // TODO: Add description
 constexpr const char* g_applicationDescription = "placeholder";
 constexpr const char* g_applicationContactAddress = "<lurkydismal@duck.com>";
@@ -20,6 +40,12 @@ static auto parserForOption( int _key, char* _value, struct argp_state* _state )
     error_t l_returnValue = 0;
 
     switch ( _key ) {
+        case ARGP_KEY_ARG: {
+            g_sources.emplace_back( _value );
+
+            break;
+        }
+
         case ARGP_KEY_END: {
             if ( g_sources.empty() ) {
                 argp_error( _state, "No input(s) provided." );
@@ -27,10 +53,6 @@ static auto parserForOption( int _key, char* _value, struct argp_state* _state )
 
             if ( g_compilationSourceDirectory.empty() ) {
                 g_compilationSourceDirectory = ".";
-            }
-
-            if ( g_compileArgs.empty() ) {
-                g_compileArgs = { "-std=gnu23" };
             }
 
             break;
@@ -133,8 +155,9 @@ auto parseArguments( int _argumentCount, char** _argumentVector ) -> bool {
                 nullptr,          nullptr,
                 nullptr };
 
-            l_returnValue = argp_parse( &l_argumentParser, _argumentCount,
-                                        _argumentVector, 0, nullptr, nullptr );
+            l_returnValue =
+                ( argp_parse( &l_argumentParser, _argumentCount,
+                              _argumentVector, 0, nullptr, nullptr ) == 0 );
         }
 
         if ( !l_returnValue ) {

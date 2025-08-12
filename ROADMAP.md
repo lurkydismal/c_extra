@@ -32,7 +32,7 @@ The goal is to output **100% valid C** compatible with the latest Clang supporte
 
 ## Milestones
 
-### Version 0.1 - Core Functionality [ _in progress_ ]
+### Version 0.1 - Core Functionality \[ _in progress_ ]
 
 - [ ] Implement iteration over `struct`/ `enum`/ `union`/ function arguments
 - [ ] Implement `constinit` and limited `consteval` (without `if` support) keywords
@@ -40,7 +40,7 @@ The goal is to output **100% valid C** compatible with the latest Clang supporte
 ### Version 0.2 - Extend Compile-time Functionality
 
 - [ ] Implement `constexpr` keywords
-- [ ] Implement limited iteration over *something* with `annotation` (without scope support)
+- [ ] Implement limited `iterate_annotation` (without scope support)
 
 ### Version 0.3 - Extend Preprocessor functionality
 
@@ -50,7 +50,8 @@ The goal is to output **100% valid C** compatible with the latest Clang supporte
 ### Version 0.4 - Complete *limited* functionality
 
 - [ ] Complete `consteval` keyword (with `if` support)
-- [ ] Complete iteration over *something* with `annotation` (with scope support)
+- [ ] Complete `iterate_annotation` (with scope support)
+- [ ] Implement `iterate_scope`
 
 ### Version 0.5 - User Experience
 

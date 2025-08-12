@@ -1,24 +1,30 @@
 #include "iterate_struct.hpp"
 
-#include <clang/ASTMatchers/ASTMatchFinder.h>
 #include <clang/ASTMatchers/ASTMatchers.h>
-#include <clang/Frontend/CompilerInstance.h>
-#include <clang/Frontend/FrontendActions.h>
 #include <clang/Lex/Lexer.h>
-#include <clang/Rewrite/Core/Rewriter.h>
-#include <clang/Tooling/CommonOptionsParser.h>
-#include <clang/Tooling/CompilationDatabase.h>
-#include <clang/Tooling/Tooling.h>
+
+#include "clang/AST/Expr.h"
+
+using namespace clang::ast_matchers;
 
 SFuncHandler::SFuncHandler( clang::Rewriter& _r ) : _theRewriter( _r ) {}
 
-void SFuncHandler::run(
-    const clang::ast_matchers::MatchFinder::MatchResult& _result ) {
+void SFuncHandler::run( const MatchFinder::MatchResult& _result ) {
     const auto* l_call =
         _result.Nodes.getNodeAs< clang::CallExpr >( "sFuncCall" );
 
     if ( !l_call )
         return;
+
+    const auto* l_macroStr =
+        _result.Nodes.getNodeAs< clang::StringLiteral >( "macroStr" );
+
+    if ( !l_macroStr ) {
+        return;
+    }
+
+    std::string l_macroName = l_macroStr->getString().str();
+    llvm::outs() << "Found macro name: " << l_macroName << "\n";
 
     clang::SourceManager& l_sm = *_result.SourceManager;
     clang::LangOptions l_lo = _result.Context->getLangOpts();
@@ -27,8 +33,11 @@ void SFuncHandler::run(
     const clang::Expr* l_arg1 = l_call->getArg( 1 )->IgnoreParenImpCasts();
     clang::CharSourceRange l_cbRange =
         clang::CharSourceRange::getTokenRange( l_arg1->getSourceRange() );
+#if 0
     std::string l_callbackName =
         clang::Lexer::getSourceText( l_cbRange, l_sm, l_lo ).str();
+#endif
+    std::string& l_callbackName = l_macroName;
 
     // Process the first argument: expect pointer to struct
     const clang::Expr* l_arg0 = l_call->getArg( 0 )->IgnoreParenImpCasts();
@@ -110,39 +119,33 @@ void SFuncHandler::run(
         std::string l_typeName = l_field->getType().getAsString();
         std::string l_fieldRef;
 
-        if ( l_pointerPassed ) {
-            l_fieldRef.append( "&((" )
-                .append( l_baseExprText )
-                .append( ")->" )
-                .append( l_fieldName )
-                .append( ")" );
+        l_fieldRef.append( "&(" )
+            .append( ( l_pointerPassed ) ? ( "(" ) : ( "" ) )
+            .append( l_baseExprText )
+            .append( ( l_pointerPassed ) ? ( ")->" ) : ( "." ) )
+            .append( l_fieldName )
+            .append( ")" );
 
-        } else {
-            l_fieldRef.append( "&(" )
-                .append( l_baseExprText )
-                .append( "." )
-                .append( l_fieldName )
-                .append( ")" );
-        }
-
-        // callbackName( "fieldName", fieldTypeAsString, &(variable->field),
-        // offsetof( structType, field ), sizeof( ( (structType*) 0)->field
-        // ) );
+        // callbackName( "fieldName", "fieldType", &(variable->field),
+        // __builtin_offsetof( structType, field ), sizeof( ( (structType*)
+        // 0)->field ) );
         l_replacementText.append( l_indent )
             .append( l_callbackName )
             .append( "(" )
             .append( "\"" )
             .append( l_fieldName )
             .append( "\", " ) // "fieldName",
+            .append( "\"" )
             .append( l_typeName )
-            .append( ", " ) // fieldType
+            .append( "\"" )
+            .append( ", " ) // "fieldType",
             .append( l_fieldRef )
             .append( ", " ) // &(variable->field),
-            .append( "offsetof(" )
+            .append( "__builtin_offsetof(" )
             .append( l_recType.getAsString() )
             .append( ", " )
             .append( l_fieldName )
-            .append( "), " ) // offsetof(structType, field),
+            .append( "), " ) // __builtin_offsetof(structType, field),
             .append( "sizeof(((" )
             .append( l_recType.getAsString() )
             .append( "*)0)->" )
@@ -177,13 +180,21 @@ SFuncASTConsumer::SFuncASTConsumer( clang::Rewriter& _r )
     : _handlerForSFunc( _r ) {
     // Match calls to sFunc(...)
     _matcher.addMatcher(
-        clang::ast_matchers::callExpr(
-            clang::ast_matchers::callee( clang::ast_matchers::functionDecl(
-                clang::ast_matchers::hasName( "sFunc" ) ) ) )
+        callExpr(
+            callee( functionDecl( hasName( "sFunc" ) ) ),
+            hasArgument(
+                0, expr( hasType( pointerType( pointee( recordType() ) ) ) )
+                       .bind( "structPtrArg" ) ),
+            hasArgument( 1, stringLiteral().bind( "macroStr" ) ) )
             .bind( "sFuncCall" ),
         &_handlerForSFunc );
 }
 
 void SFuncASTConsumer::HandleTranslationUnit( clang::ASTContext& _context ) {
+#if 0
+    Step3 step3;
+    step3.run( _context, step2.getIntermediate() );
+#endif
+
     _matcher.matchAST( _context );
 }

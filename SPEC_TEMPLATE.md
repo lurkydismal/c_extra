@@ -60,8 +60,8 @@ asset_t l_asset;
     "Field offset: '%zu'\n" \
     "Field size: '%zu'\n\n"
 
-#define printAsset( _fieldName, _fieldTypeAsString, _fieldReference, _fieldOffset, _fieldSize ) do {
-    printf( ASSET_FORMAT, (_fieldName), (_fieldTypeAsString), (_fieldOffset), (_fieldSize) );
+#define printAsset( _fieldName, _fieldTypeAsString, _fieldReference, _fieldOffset, _fieldSize ) do { \
+    printf( ASSET_FORMAT, (_fieldName), (_fieldTypeAsString), (_fieldOffset), (_fieldSize) );        \
 } while ( 0 )
 
 iterate_struct( &l_asset, printAsset );
@@ -75,13 +75,13 @@ iterate_struct( &l_asset, printAsset );
 ```c
 Field name: 'data'
 Field type: 'uint8_t*'
-Field offset: '123'
-Field size: '321'
+Field offset: '0'
+Field size: '8'
 
 Field name: 'size'
 Field type: 'size_t'
-Field offset: '456'
-Field size: '654'
+Field offset: '8'
+Field size: '8'
 ```
 
 ### **Dependencies/ Requirements**
