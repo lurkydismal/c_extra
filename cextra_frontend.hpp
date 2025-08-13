@@ -7,7 +7,7 @@
 class CExtraFrontendAction : public clang::ASTFrontendAction {
 public:
     auto CreateASTConsumer( clang::CompilerInstance& _ci,
-                            const clang::StringRef _file )
+                            const clang::StringRef _filePath )
         -> std::unique_ptr< clang::ASTConsumer > override;
 
 #if 0

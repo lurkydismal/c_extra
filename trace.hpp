@@ -11,16 +11,21 @@
     do {                                                 \
         if ( g_needTrace ) {                             \
             std::string l_message = TRACE_ENTER_MESSAGE; \
-            l_message.append( __FUNCTION__ );            \
+            l_message.append( "\"" )                     \
+                .append( __PRETTY_FUNCTION__ )           \
+                .append( "\"" );                         \
             log( l_message );                            \
         }                                                \
     } while ( 0 )
 
+// TODO: Implement return value tracking
 #define traceExit()                                     \
     do {                                                \
         if ( g_needTrace ) {                            \
             std::string l_message = TRACE_EXIT_MESSAGE; \
-            l_message.append( __FUNCTION__ );           \
+            l_message.append( "\"" )                    \
+                .append( __PRETTY_FUNCTION__ )          \
+                .append( "\"" );                        \
             log( l_message );                           \
         }                                               \
     } while ( 0 )

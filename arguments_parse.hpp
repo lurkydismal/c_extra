@@ -15,6 +15,7 @@ extern bool g_isQuietRun;
 extern bool g_isDryRun;
 extern bool g_needEditInPlace;
 extern bool g_needDefaultIncludes;
+extern bool g_isCheckOnly;
 extern bool g_needTrace;
 
 auto parseArguments( int _argumentCount, char** _argumentVector ) -> bool;

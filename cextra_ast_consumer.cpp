@@ -1,9 +1,13 @@
 #include "cextra_ast_consumer.hpp"
 
+#include "trace.hpp"
+
 using namespace clang::ast_matchers;
 
 CExtraASTConsumer::CExtraASTConsumer( clang::Rewriter& _r )
     : _handlerForSFunc( _r ) {
+    traceEnter();
+
     auto l_isRecordType = qualType( hasCanonicalType( recordType() ) );
 
     // Match calls to sFunc(&struct, "callback")
@@ -27,8 +31,14 @@ CExtraASTConsumer::CExtraASTConsumer( clang::Rewriter& _r )
             hasArgument( 1, stringLiteral().bind( "macroStr" ) ) )
             .bind( "sFuncCall" ),
         &_handlerForSFunc );
+
+    traceExit();
 }
 
 void CExtraASTConsumer::HandleTranslationUnit( clang::ASTContext& _context ) {
+    traceEnter();
+
     _matcher.matchAST( _context );
+
+    traceExit();
 }

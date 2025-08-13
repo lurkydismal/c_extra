@@ -14,6 +14,7 @@
 #include "arguments_parse.hpp"
 #include "cextra_ast_consumer.hpp"
 #include "log.hpp"
+#include "trace.hpp"
 
 #if 0
 class MacroNameReplacer : public clang::PPCallbacks {
@@ -43,8 +44,12 @@ auto CExtraFrontendAction::CreateASTConsumer(
     clang::CompilerInstance& _compilerInstance,
     const clang::StringRef _filePath )
     -> std::unique_ptr< clang::ASTConsumer > {
+    traceEnter();
+
     _theRewriter.setSourceMgr( _compilerInstance.getSourceManager(),
                                _compilerInstance.getLangOpts() );
+
+    traceExit();
 
     return ( std::make_unique< CExtraASTConsumer >( _theRewriter ) );
 }
@@ -71,6 +76,8 @@ void CExtraFrontendAction::ExecuteAction() override {
 static inline auto writeToFile( const clang::StringRef _filePath,
                                 const clang::FileID& _fileId,
                                 clang::Rewriter& _theRewriter ) -> bool {
+    traceEnter();
+
     bool l_returnValue = false;
 
     std::error_code l_errorCode;
@@ -89,74 +96,88 @@ static inline auto writeToFile( const clang::StringRef _filePath,
     _theRewriter.getEditBuffer( _fileId ).write( l_outputFile );
 
 EXIT:
+    traceExit();
+
     return ( l_returnValue );
 }
 
 void CExtraFrontendAction::EndSourceFileAction() {
+    traceEnter();
+
     clang::DiagnosticsEngine& l_diagnosticsEngine =
         getCompilerInstance().getDiagnostics();
 
     if ( l_diagnosticsEngine.hasErrorOccurred() ) {
         logError( "Processing failed due to errors." );
 
-        return;
+        goto EXIT;
     }
 
-    const clang::SourceManager& l_sourceManager = _theRewriter.getSourceMgr();
+    {
+        const clang::SourceManager& l_sourceManager =
+            _theRewriter.getSourceMgr();
 
-    const clang::FileID l_fileId = l_sourceManager.getMainFileID();
-    const clang::StringRef l_inputFile =
-        l_sourceManager.getFileEntryForID( l_fileId )->tryGetRealPathName();
+        const clang::FileID l_fileId = l_sourceManager.getMainFileID();
+        const clang::StringRef l_inputFile =
+            l_sourceManager.getFileEntryForID( l_fileId )->tryGetRealPathName();
 
-    if ( l_inputFile.empty() ) {
-        return;
-    }
+        if ( l_inputFile.empty() ) {
+            goto EXIT;
+        }
 
-    clang::SmallString< FILENAME_MAX > l_filePath = l_inputFile;
-
-    // Do not edit in-place and write to fileName -> prefix.fileName.extension
-    if ( !g_needEditInPlace ) {
-        const clang::StringRef l_fileName =
-            llvm::sys::path::filename( l_filePath );
-        // With prefix
-        std::string l_newFileName = ( g_prefix + l_fileName.str() );
-
-        // Add extension
         {
-            clang::StringRef l_extension =
-                llvm::sys::path::extension( l_newFileName );
+            clang::SmallString< FILENAME_MAX > l_filePath = l_inputFile;
 
-            if ( l_extension.empty() ) {
-                logError( "Extension not found in file name." );
+            // Do not edit in-place and write to fileName ->
+            // prefix.fileName.extension
+            if ( !g_needEditInPlace ) {
+                const clang::StringRef l_fileName =
+                    llvm::sys::path::filename( l_filePath );
+                // With prefix
+                std::string l_newFileName = ( g_prefix + l_fileName.str() );
 
-                return;
+                // Add extension
+                {
+                    const std::string l_extension =
+                        llvm::sys::path::extension( l_newFileName ).str();
+
+                    if ( l_extension.empty() ) {
+                        logError( "Extension not found in file name." );
+
+                        goto EXIT;
+                    }
+
+                    // Remove extension temporarily
+                    l_newFileName.resize( l_newFileName.size() -
+                                          l_extension.size() );
+
+                    // Append custom extension + original one
+                    l_newFileName += g_extension;
+                    l_newFileName += l_extension;
+                }
+
+                llvm::sys::path::remove_filename( l_filePath );
+                llvm::sys::path::append( l_filePath, l_newFileName );
             }
 
-            // Remove extension temporarily
-            l_newFileName.resize( l_newFileName.size() - l_extension.size() );
+            if ( !g_isDryRun ) {
+                clang::SmallString< FILENAME_MAX > l_outputPath;
 
-            // Append custom extension + original one
-            l_newFileName += g_extension;
-            l_newFileName += l_extension;
+                if ( !g_outputDirectory.empty() ) {
+                    const clang::StringRef l_fileName =
+                        llvm::sys::path::filename( l_filePath );
+
+                    l_outputPath = ( g_outputDirectory + l_fileName.str() );
+
+                } else {
+                    l_outputPath = l_filePath;
+                }
+
+                writeToFile( l_filePath, l_fileId, _theRewriter );
+            }
         }
-
-        llvm::sys::path::remove_filename( l_filePath );
-        llvm::sys::path::append( l_filePath, l_newFileName );
     }
 
-    if ( !g_isDryRun ) {
-        clang::SmallString< FILENAME_MAX > l_outputPath;
-
-        if ( !g_outputDirectory.empty() ) {
-            const clang::StringRef l_fileName =
-                llvm::sys::path::filename( l_filePath );
-
-            l_outputPath = ( g_outputDirectory + l_fileName.str() );
-
-        } else {
-            l_outputPath = l_filePath;
-        }
-
-        writeToFile( l_filePath, l_fileId, _theRewriter );
-    }
+EXIT:
+    traceExit();
 }

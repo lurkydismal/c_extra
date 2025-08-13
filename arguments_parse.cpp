@@ -4,6 +4,8 @@
 
 #include <string>
 
+#include "trace.hpp"
+
 std::string g_compilationSourceDirectory = ".";
 std::string g_outputDirectory;
 std::vector< std::string > g_compileArguments = {
@@ -32,9 +34,8 @@ bool g_isQuietRun = false;
 bool g_isDryRun = false;
 bool g_needEditInPlace = false;
 bool g_needDefaultIncludes = true;
-bool g_needTrace = true;
-// FIX: Probably reduntant variable
-static bool g_needSwitchTrace = true;
+bool g_isCheckOnly = false;
+bool g_needTrace = false;
 
 constexpr const char* g_applicationIdentifier = "c_extra";
 constexpr const char* g_applicationVersion = "0.0";
@@ -58,11 +59,14 @@ enum class parserOption : int16_t {
     undefine = 'U',
     include = 'I',
     disableDefaultIncludes = 1000,
+    checkOnly = 'c',
     trace = 1001,
 };
 
 static auto parserForOption( int _key, char* _value, struct argp_state* _state )
     -> error_t {
+    traceEnter();
+
     error_t l_returnValue = 0;
 
     switch ( _key ) {
@@ -141,8 +145,14 @@ static auto parserForOption( int _key, char* _value, struct argp_state* _state )
             break;
         }
 
+        case ( int )parserOption::checkOnly: {
+            g_isCheckOnly = true;
+
+            break;
+        }
+
         case ( int )parserOption::trace: {
-            g_needSwitchTrace = false;
+            g_needTrace = true;
 
             break;
         }
@@ -164,10 +174,6 @@ static auto parserForOption( int _key, char* _value, struct argp_state* _state )
                                            g_defaultIncludes.end() );
             }
 
-            if ( g_needSwitchTrace ) {
-                g_needTrace = !g_needTrace;
-            }
-
             break;
         }
 
@@ -176,10 +182,14 @@ static auto parserForOption( int _key, char* _value, struct argp_state* _state )
         }
     }
 
+    traceExit();
+
     return ( l_returnValue );
 }
 
 auto parseArguments( int _argumentCount, char** _argumentVector ) -> bool {
+    traceEnter();
+
     bool l_returnValue = false;
 
     {
@@ -239,8 +249,7 @@ auto parseArguments( int _argumentCount, char** _argumentVector ) -> bool {
                   "Treat all warnings as errors", 2 },
                 // TODO: Implement
                 { "no-warnings", 0, nullptr, 0, "Suppress warnings", 2 },
-                // TODO: Implement
-                { "check-only", 'c', nullptr, 0,
+                { "check-only", ( int )parserOption::checkOnly, nullptr, 0,
                   "Parse and validate without generating output", 2 },
                 // TODO: Implement
                 { "dump-ast", 0, nullptr, 0, "Output parsed AST for debugging",
@@ -251,7 +260,11 @@ auto parseArguments( int _argumentCount, char** _argumentVector ) -> bool {
                 { "trace", ( int )parserOption::trace, nullptr, 0,
                   "Trace processing steps", 3 },
                 // TODO: Implement
-                { "profile", 0, nullptr, 0, "Print timing/ performance info",
+                { "profile", 0, "LEVEL", 0,
+                  "Print timing/ performance info (summary, detailed, flame)",
+                  3 },
+                // TODO: Implement
+                { "profile-output", 0, "FILE", 0, "Path to profile output file",
                   3 },
                 // TODO: Implement
                 { "internal-dump", 0, nullptr, 0,
@@ -283,5 +296,7 @@ auto parseArguments( int _argumentCount, char** _argumentVector ) -> bool {
     }
 
 EXIT:
+    traceExit();
+
     return ( l_returnValue );
 }
