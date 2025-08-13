@@ -6,6 +6,8 @@
 extern std::string g_compilationSourceDirectory;
 extern std::vector< std::string > g_compileArguments;
 extern std::vector< std::string > g_sources;
+extern std::string g_prefix;
+extern std::string g_extension;
 
 // Flags
 extern bool g_needEditInPlace;

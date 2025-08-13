@@ -3,25 +3,20 @@
 #include <argp.h>
 
 std::string g_compilationSourceDirectory;
-// TODO: Improve
 std::vector< std::string > g_compileArguments = {
     "-std=gnu23",
 
-    // Default options
-    "-isystem",
-    "/usr/lib/clang/20/include",
+    // Default includes
     "-isystem",
     "/usr/local/include",
-    "-isystem",
-    "/usr/bin/../lib64/gcc/x86_64-pc-linux-gnu/15.1.1/../../../../"
-    "x86_64-pc-linux-gnu/include",
     "-isystem",
     "/include",
     "-isystem",
     "/usr/include",
 };
-
 std::vector< std::string > g_sources;
+std::string g_prefix = ".";
+std::string g_extension;
 
 // Flags
 bool g_needEditInPlace = false;
@@ -40,6 +35,51 @@ static auto parserForOption( int _key, char* _value, struct argp_state* _state )
     error_t l_returnValue = 0;
 
     switch ( _key ) {
+        case 'i': {
+            g_needEditInPlace = true;
+
+            break;
+        }
+
+        case 'p': {
+            g_prefix = _value;
+
+            break;
+        }
+
+        case 'e': {
+            g_extension = _value;
+
+            break;
+        }
+
+        case 'D': {
+            std::string l_compileArgument = "-D ";
+            l_compileArgument += _value;
+
+            g_compileArguments.emplace_back( l_compileArgument );
+
+            break;
+        }
+
+        case 'U': {
+            std::string l_compileArgument = "-U ";
+            l_compileArgument += _value;
+
+            g_compileArguments.emplace_back( l_compileArgument );
+
+            break;
+        }
+
+        case 'I': {
+            std::string l_compileArgument = "-I ";
+            l_compileArgument += _value;
+
+            g_compileArguments.emplace_back( l_compileArgument );
+
+            break;
+        }
+
         case ARGP_KEY_ARG: {
             g_sources.emplace_back( _value );
 
@@ -94,11 +134,12 @@ auto parseArguments( int _argumentCount, char** _argumentVector ) -> bool {
                 { "source", 's', "DIR", 0, "Path to source directory", 1 },
                 // TODO: Implement
                 { "output", 'o', "DIR", 0, "Path to output directory", 1 },
-                // TODO: Implement
                 { "in-place", 'i', nullptr, 0, "Modify files in place", 1 },
-                // TODO: Implement
+                { "prefix", 'p', "PREFIX", 0,
+                  "Set prefix for generated files (e.g. .filename.c)", 1 },
                 { "extension", 'e', "EXT", 0,
-                  "Set extension for generated files (e.g. .gen.c)", 1 },
+                  "Set extension for generated files (e.g. filename.gen.c)",
+                  1 },
                 // TODO: Implement
                 { "stdin", 0, nullptr, 0,
                   "Read from standard input instead of file(s)", 1 },
@@ -111,13 +152,10 @@ auto parseArguments( int _argumentCount, char** _argumentVector ) -> bool {
                 // TODO: Implement
                 { "disable-feature", 0, "NAME", 0,
                   "Disable a specific syntax/ feature", 2 },
-                // TODO: Implement
                 { "define", 'D', "NAME=VAL", 0,
                   "Define macro before processing", 2 },
-                // TODO: Implement
                 { "undef", 'U', "NAME", 0, "Undefine macro before processing",
                   2 },
-                // TODO: Implement
                 { "include-path", 'I', "DIR", 0,
                   "Add directory to include search path", 2 },
                 // TODO: Implement
@@ -137,11 +175,12 @@ auto parseArguments( int _argumentCount, char** _argumentVector ) -> bool {
                 // TODO: Implement
                 { "trace", 0, nullptr, 0, "Trace processing steps", 3 },
                 // TODO: Implement
-                { "profile", 0, nullptr, 0, "Print timing/performance info",
+                { "profile", 0, nullptr, 0, "Print timing/ performance info",
                   3 },
                 // TODO: Implement
                 { "internal-dump", 0, nullptr, 0,
-                  "Dump raw internal LLVM/Clang structures (for dev only)", 3 },
+                  "Dump raw internal LLVM/ Clang structures (for dev only)",
+                  3 },
                 { nullptr, 0, nullptr, 0, nullptr, 0 } };
 
             // [NAME] - optional

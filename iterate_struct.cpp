@@ -13,9 +13,11 @@ void SFuncHandler::run( const MatchFinder::MatchResult& _result ) {
     const auto* l_call =
         _result.Nodes.getNodeAs< clang::CallExpr >( "sFuncCall" );
 
-    if ( !l_call )
+    if ( !l_call ) {
         return;
+    }
 
+    // 2nd arguemnt
     const auto* l_macroStr =
         _result.Nodes.getNodeAs< clang::StringLiteral >( "macroStr" );
 
@@ -23,108 +25,155 @@ void SFuncHandler::run( const MatchFinder::MatchResult& _result ) {
         return;
     }
 
-    std::string l_macroName = l_macroStr->getString().str();
-    llvm::outs() << "Found macro name: " << l_macroName << "\n";
+    std::string l_callbackName = l_macroStr->getString().str();
+    llvm::outs() << "Found macro name: " << l_callbackName << "\n";
 
-    clang::SourceManager& l_sm = *_result.SourceManager;
-    clang::LangOptions l_lo = _result.Context->getLangOpts();
+    // 1nd arguemnt
+    const auto* l_addrDeclRef =
+        _result.Nodes.getNodeAs< clang::DeclRefExpr >( "addrDeclRef" );
+    const auto* l_ptrDeclRef =
+        _result.Nodes.getNodeAs< clang::DeclRefExpr >( "ptrDeclRef" );
 
-    // Get the callback macro name (2nd argument) as text
-    const clang::Expr* l_arg1 = l_call->getArg( 1 )->IgnoreParenImpCasts();
-    clang::CharSourceRange l_cbRange =
-        clang::CharSourceRange::getTokenRange( l_arg1->getSourceRange() );
-#if 0
-    std::string l_callbackName =
-        clang::Lexer::getSourceText( l_cbRange, l_sm, l_lo ).str();
-#endif
-    std::string& l_callbackName = l_macroName;
+    if ( !l_addrDeclRef && !l_ptrDeclRef ) {
+        llvm::errs() << "No addrDeclRef or ptrDeclRef bound\n";
 
-    // Process the first argument: expect pointer to struct
-    const clang::Expr* l_arg0 = l_call->getArg( 0 )->IgnoreParenImpCasts();
-    l_arg0 = l_arg0->IgnoreParenImpCasts();
-
-    std::string l_baseExprText;
-    bool l_pointerPassed = true;
-    clang::QualType l_recType;
-
-    // If arg0 is an address-of operator, handle specially
-    if ( const auto* l_uop = dyn_cast< clang::UnaryOperator >( l_arg0 ) ) {
-        if ( l_uop->getOpcode() == clang::UO_AddrOf ) {
-            l_pointerPassed = false;
-
-            const clang::Expr* l_sub =
-                l_uop->getSubExpr()->IgnoreParenImpCasts();
-
-            // Get the struct type from the sub-expression
-            l_recType = l_sub->getType();
-
-            // Text of the base variable (e.g. "var")
-            clang::CharSourceRange l_baseRange =
-                clang::CharSourceRange::getTokenRange(
-                    l_sub->getSourceRange() );
-
-            l_baseExprText =
-                clang::Lexer::getSourceText( l_baseRange, l_sm, l_lo ).str();
-        }
+        return;
     }
 
-    if ( l_pointerPassed ) {
-        // arg0 is already a pointer expression; get pointee struct type
-        clang::QualType l_ptrType = l_arg0->getType();
+    const bool l_pointerPassed = ( l_ptrDeclRef != nullptr );
+    const clang::DeclRefExpr* l_baseDeclRef =
+        l_ptrDeclRef ? l_ptrDeclRef : l_addrDeclRef;
 
-        if ( l_ptrType.getTypePtrOrNull() )
-            l_recType = l_ptrType->getPointeeType();
-
-        clang::CharSourceRange l_baseRange =
-            clang::CharSourceRange::getTokenRange( l_arg0->getSourceRange() );
-
-        l_baseExprText =
-            clang::Lexer::getSourceText( l_baseRange, l_sm, l_lo ).str();
-    }
-
-    if ( !l_recType->isStructureType() )
+    if ( !l_baseDeclRef )
         return;
 
-    const clang::RecordType* l_rt = l_recType->getAs< clang::RecordType >();
+    const auto* l_varDecl =
+        llvm::dyn_cast< clang::VarDecl >( l_baseDeclRef->getDecl() );
 
+    if ( !l_varDecl )
+        return;
+
+    clang::QualType l_varType = l_varDecl->getType();
+    clang::QualType l_recordQt;
+
+    if ( l_pointerPassed ) {
+        // pointer was passed; try to get pointee
+        if ( l_varType->isPointerType() ) {
+            l_recordQt = l_varType->getPointeeType();
+        } else if ( const auto* RT =
+                        l_varType->getAs< clang::ReferenceType >() ) {
+            // defensive for C++ reference types
+            l_recordQt = RT->getPointeeType();
+        } else {
+            // fallback: maybe typedef to pointer or unexpected; use as-is
+            l_recordQt = l_varType;
+        }
+    } else {
+        // &var was passed; var should be a record type
+        l_recordQt = l_varType;
+    }
+
+    // Normalize type: strip qualifiers/typedefs
+    l_recordQt = l_recordQt.getUnqualifiedType();
+
+    if ( l_recordQt.isNull() ) {
+        return;
+    }
+
+    if ( !l_recordQt->isStructureType() && !l_recordQt->isUnionType() ) {
+        // Not a struct/union; nothing to do
+        return;
+    }
+
+    const clang::RecordType* l_rt = l_recordQt->getAs< clang::RecordType >();
     if ( !l_rt )
         return;
 
     clang::RecordDecl* l_rd = l_rt->getDecl();
-
-    // if (!RD->hasDefinition()) RD = RD->getDefinition();
-
-    l_rd = l_rd->getDefinition();
-
     if ( !l_rd )
         return;
 
-    // Determine indentation from call location
-    clang::SourceLocation l_startLoc = l_call->getBeginLoc();
-    unsigned l_col = l_sm.getSpellingColumnNumber( l_startLoc );
-    std::string l_indent( l_col - 1, ' ' );
+    // Need the definition to iterate fields
+    l_rd = l_rd->getDefinition();
+    if ( !l_rd ) {
+        llvm::errs() << "Record has no definition (forward-decl): "
+                     << l_varDecl->getNameAsString() << "\n";
+        return;
+    }
 
-    // Build replacement text: one cb(...) call per field
+    clang::SourceManager& l_sm = *( _result.SourceManager );
+    clang::LangOptions l_lo = _result.Context->getLangOpts();
+
+    // Get base expression text (use declref token-range so we get exact var
+    // text)
+    clang::CharSourceRange l_baseRange = clang::CharSourceRange::getTokenRange(
+        l_baseDeclRef->getSourceRange() );
+
+    std::string l_baseExprText;
+    bool l_gotBaseText = false;
+    if ( l_baseRange.isValid() ) {
+        llvm::Expected< llvm::StringRef > l_maybeText =
+            clang::Lexer::getSourceText( l_baseRange, l_sm, l_lo );
+        if ( l_maybeText ) {
+            l_baseExprText = l_maybeText->str();
+            l_gotBaseText = true;
+        }
+    }
+    if ( !l_gotBaseText ) {
+        // fallback to var name if source text extraction failed
+        l_baseExprText = l_varDecl->getNameAsString();
+    }
+
+    // Determine indentation from call location (use spelling loc for column)
+    clang::SourceLocation l_startLoc =
+        l_sm.getSpellingLoc( l_call->getBeginLoc() );
+    unsigned l_col = l_sm.getSpellingColumnNumber( l_startLoc );
+    std::string l_indent( ( l_col > 0 ) ? ( l_col - 1 ) : 0, ' ' );
+
+    // Prepare replacement
     std::string l_replacementText = "\n";
 
+    // Get a reasonable textual representation of the record type for
+    // offsetof/sizeof. Prefer the printed QualType (may include "struct ..." or
+    // typedef name).
+    std::string l_recordTypeStr = l_recordQt.getAsString();
+
     for ( const clang::FieldDecl* l_field : l_rd->fields() ) {
-        if ( l_field->isUnnamedBitField() )
+        if ( l_field->isUnnamedBitField() ) {
             continue;
+        }
+
+        if ( !l_field->getIdentifier() ) {
+            continue;
+        }
 
         std::string l_fieldName = l_field->getNameAsString();
 
-        if ( l_fieldName.empty() )
+        if ( l_fieldName.empty() ) {
             continue;
+        }
 
-        std::string l_typeName = l_field->getType().getAsString();
-        std::string l_fieldRef;
+        // Build the &(base->field) or &(base.field) expression safely
+        std::string l_memberAccess;
 
-        l_fieldRef.append( "&(" )
-            .append( ( l_pointerPassed ) ? ( "(" ) : ( "" ) )
-            .append( l_baseExprText )
-            .append( ( l_pointerPassed ) ? ( ")->" ) : ( "." ) )
-            .append( l_fieldName )
-            .append( ")" );
+        if ( l_pointerPassed ) {
+            // wrap base in parentheses to be safe if base is a complex
+            // expression
+            l_memberAccess = "(";
+            l_memberAccess += l_baseExprText;
+            l_memberAccess += ")->";
+            l_memberAccess += l_fieldName;
+
+        } else {
+            l_memberAccess = l_baseExprText;
+            l_memberAccess += ".";
+            l_memberAccess += l_fieldName;
+        }
+
+        std::string l_fieldRef = "&(" + l_memberAccess + ")";
+
+        // Field type string (use printing - may include qualifiers)
+        std::string l_fieldTypeStr = l_field->getType().getAsString();
 
         // callbackName( "fieldName", "fieldType", &(variable->field),
         // __builtin_offsetof( structType, field ), sizeof( ( (structType*)
@@ -134,20 +183,21 @@ void SFuncHandler::run( const MatchFinder::MatchResult& _result ) {
             .append( "(" )
             .append( "\"" )
             .append( l_fieldName )
-            .append( "\", " ) // "fieldName",
+            .append( "\"" ) // "fieldName"
+            .append( ", " )
             .append( "\"" )
-            .append( l_typeName )
-            .append( "\"" )
-            .append( ", " ) // "fieldType",
-            .append( l_fieldRef )
-            .append( ", " ) // &(variable->field),
+            .append( l_fieldTypeStr )
+            .append( "\"" ) // "fieldType"
+            .append( ", " )
+            .append( l_fieldRef ) // &(variable->field)
+            .append( ", " )
             .append( "__builtin_offsetof(" )
-            .append( l_recType.getAsString() )
+            .append( l_recordTypeStr )
             .append( ", " )
             .append( l_fieldName )
-            .append( "), " ) // __builtin_offsetof(structType, field),
+            .append( "), " ) // __builtin_offsetof(structType, field)
             .append( "sizeof(((" )
-            .append( l_recType.getAsString() )
+            .append( l_recordTypeStr )
             .append( "*)0)->" )
             .append( l_fieldName )
             .append( ")" ) // sizeof(((structType*)0)->field)
@@ -162,29 +212,54 @@ void SFuncHandler::run( const MatchFinder::MatchResult& _result ) {
     bool l_includeSemi = false;
 
     if ( l_afterCall.isValid() ) {
-        const char* l_c = l_sm.getCharacterData( l_afterCall );
+        // Check the immediate character after the call end; use spelling
+        // location
+        const char* l_c = nullptr;
 
-        if ( l_c && *l_c == ';' )
+        clang::SourceLocation l_afterSpelling =
+            l_sm.getSpellingLoc( l_afterCall );
+
+        if ( l_afterSpelling.isValid() ) {
+            l_c = l_sm.getCharacterData( l_afterSpelling, nullptr );
+        }
+
+        if ( l_c && *l_c == ';' ) {
             l_includeSemi = true;
+        }
     }
+
     clang::SourceLocation l_replaceEnd =
         ( ( l_includeSemi ) ? ( l_afterCall.getLocWithOffset( 1 ) )
                             : ( l_endLoc ) );
-    clang::CharSourceRange l_toReplace =
-        clang::CharSourceRange::getCharRange( l_startLoc, l_replaceEnd );
+
+    clang::CharSourceRange l_toReplace = clang::CharSourceRange::getCharRange(
+        l_call->getBeginLoc(), l_replaceEnd );
 
     _theRewriter.ReplaceText( l_toReplace, l_replacementText );
 }
 
 SFuncASTConsumer::SFuncASTConsumer( clang::Rewriter& _r )
     : _handlerForSFunc( _r ) {
-    // Match calls to sFunc(...)
+    auto l_isRecordType = qualType( hasCanonicalType( recordType() ) );
+
+    // Match calls to sFunc(&struct, "callback")
     _matcher.addMatcher(
         callExpr(
             callee( functionDecl( hasName( "sFunc" ) ) ),
             hasArgument(
-                0, expr( hasType( pointerType( pointee( recordType() ) ) ) )
-                       .bind( "structPtrArg" ) ),
+                0,
+                anyOf(
+                    // Record (struct)
+                    unaryOperator( hasOperatorName( "&" ),
+                                   hasUnaryOperand( ignoringParenImpCasts(
+                                       declRefExpr( to( varDecl( hasType(
+                                                        l_isRecordType ) ) ) )
+                                           .bind( "addrDeclRef" ) ) ) ),
+
+                    // Pointer to record (struct*)
+                    declRefExpr(
+                        to( varDecl( hasType( pointsTo( l_isRecordType ) ) ) ) )
+                        .bind( "ptrDeclRef" ) ) ),
             hasArgument( 1, stringLiteral().bind( "macroStr" ) ) )
             .bind( "sFuncCall" ),
         &_handlerForSFunc );

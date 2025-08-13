@@ -8,7 +8,7 @@ auto main( int _argumentCount, char* _argumentVector[] ) -> int {
     int l_returnValue = EXIT_FAILURE;
 
     {
-        // TODO: Default compile arguments
+        // TODO: Default compile arguments from clang driver
 
         if ( !parseArguments( _argumentCount, _argumentVector ) ) {
             l_returnValue = EXIT_FAILURE;

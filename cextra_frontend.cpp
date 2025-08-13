@@ -37,12 +37,14 @@ private:
 };
 #endif
 
-auto CExtraFrontendAction::CreateASTConsumer( clang::CompilerInstance& _ci,
-                                              const clang::StringRef _file )
+auto CExtraFrontendAction::CreateASTConsumer(
+    clang::CompilerInstance& _compilerInstance,
+    const clang::StringRef _filePath )
     -> std::unique_ptr< clang::ASTConsumer > {
-    _theRewriter.setSourceMgr( _ci.getSourceManager(), _ci.getLangOpts() );
+    _theRewriter.setSourceMgr( _compilerInstance.getSourceManager(),
+                               _compilerInstance.getLangOpts() );
 
-    return std::make_unique< SFuncASTConsumer >( _theRewriter );
+    return ( std::make_unique< SFuncASTConsumer >( _theRewriter ) );
 }
 
 #if 0
@@ -114,7 +116,8 @@ void CExtraFrontendAction::EndSourceFileAction() {
     if ( !g_needEditInPlace ) {
         const clang::StringRef l_fileName =
             llvm::sys::path::filename( l_filePath );
-        const std::string l_newFileName = std::string( "." ) + l_fileName.str();
+        // TODO: Implement extension
+        const std::string l_newFileName = ( g_prefix + l_fileName.str() );
 
         llvm::sys::path::remove_filename( l_filePath );
         llvm::sys::path::append( l_filePath, l_newFileName );
