@@ -1,15 +1,13 @@
 #include "iterate_struct.hpp"
 
+#include <clang/AST/Expr.h>
 #include <clang/ASTMatchers/ASTMatchers.h>
 #include <clang/Lex/Lexer.h>
 
-#include "clang/AST/Expr.h"
-
-using namespace clang::ast_matchers;
-
 SFuncHandler::SFuncHandler( clang::Rewriter& _r ) : _theRewriter( _r ) {}
 
-void SFuncHandler::run( const MatchFinder::MatchResult& _result ) {
+void SFuncHandler::run(
+    const clang::ast_matchers::MatchFinder::MatchResult& _result ) {
     const auto* l_call =
         _result.Nodes.getNodeAs< clang::CallExpr >( "sFuncCall" );
 
@@ -60,10 +58,10 @@ void SFuncHandler::run( const MatchFinder::MatchResult& _result ) {
         // pointer was passed; try to get pointee
         if ( l_varType->isPointerType() ) {
             l_recordQt = l_varType->getPointeeType();
-        } else if ( const auto* RT =
+        } else if ( const auto* l_rt =
                         l_varType->getAs< clang::ReferenceType >() ) {
             // defensive for C++ reference types
-            l_recordQt = RT->getPointeeType();
+            l_recordQt = l_rt->getPointeeType();
         } else {
             // fallback: maybe typedef to pointer or unexpected; use as-is
             l_recordQt = l_varType;
@@ -236,40 +234,4 @@ void SFuncHandler::run( const MatchFinder::MatchResult& _result ) {
         l_call->getBeginLoc(), l_replaceEnd );
 
     _theRewriter.ReplaceText( l_toReplace, l_replacementText );
-}
-
-SFuncASTConsumer::SFuncASTConsumer( clang::Rewriter& _r )
-    : _handlerForSFunc( _r ) {
-    auto l_isRecordType = qualType( hasCanonicalType( recordType() ) );
-
-    // Match calls to sFunc(&struct, "callback")
-    _matcher.addMatcher(
-        callExpr(
-            callee( functionDecl( hasName( "sFunc" ) ) ),
-            hasArgument(
-                0,
-                anyOf(
-                    // Record (struct)
-                    unaryOperator( hasOperatorName( "&" ),
-                                   hasUnaryOperand( ignoringParenImpCasts(
-                                       declRefExpr( to( varDecl( hasType(
-                                                        l_isRecordType ) ) ) )
-                                           .bind( "addrDeclRef" ) ) ) ),
-
-                    // Pointer to record (struct*)
-                    declRefExpr(
-                        to( varDecl( hasType( pointsTo( l_isRecordType ) ) ) ) )
-                        .bind( "ptrDeclRef" ) ) ),
-            hasArgument( 1, stringLiteral().bind( "macroStr" ) ) )
-            .bind( "sFuncCall" ),
-        &_handlerForSFunc );
-}
-
-void SFuncASTConsumer::HandleTranslationUnit( clang::ASTContext& _context ) {
-#if 0
-    Step3 step3;
-    step3.run( _context, step2.getIntermediate() );
-#endif
-
-    _matcher.matchAST( _context );
 }

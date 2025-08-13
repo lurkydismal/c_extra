@@ -6,6 +6,7 @@ add_clang_executable(c_extra
     main.cpp
     arguments_parse.cpp
     cextra_frontend.cpp
+    cextra_ast_consumer.cpp
     iterate_struct.cpp
 )
 

@@ -2,21 +2,22 @@
 Checks: >
   clang-analyzer-*
   ,bugprone-*
-  ,cppcoreguidelines-*
-  ,performance-*
   ,-bugprone-easily-swappable-parameters
   ,-bugprone-multi-level-implicit-pointer-conversion
   ,-bugprone-narrowing-conversions
   ,-bugprone-reserved-identifier
+  ,-bugprone-sizeof-expression
   ,-bugprone-suspicious-realloc-usage
   ,-clang-diagnostic-#pragma-messages
+  ,cppcoreguidelines-*
+  ,-cppcoreguidelines-avoid-do-while
+  ,-cppcoreguidelines-avoid-goto
   ,-cppcoreguidelines-avoid-non-const-global-variables
   ,-cppcoreguidelines-macro-to-enum
   ,-cppcoreguidelines-narrowing-conversions
-  ,-cppcoreguidelines-avoid-goto
-  ,-bugprone-sizeof-expression
   ,modernize-*
   ,-modernize-macro-to-enum
+  ,performance-*
   ,readability-identifier-naming
 
 # Never try to re-format:

@@ -3,16 +3,19 @@
 
 #include "arguments_parse.hpp"
 #include "cextra_frontend.hpp"
+#include "trace.hpp"
 
 auto main( int _argumentCount, char* _argumentVector[] ) -> int {
-    int l_returnValue = EXIT_FAILURE;
+    traceEnter();
+
+    bool l_returnValue = false;
 
     {
         // TODO: Default compile arguments from clang driver
 
-        if ( !parseArguments( _argumentCount, _argumentVector ) ) {
-            l_returnValue = EXIT_FAILURE;
+        l_returnValue = parseArguments( _argumentCount, _argumentVector );
 
+        if ( !l_returnValue ) {
             goto EXIT;
         }
 
@@ -27,9 +30,12 @@ auto main( int _argumentCount, char* _argumentVector[] ) -> int {
         auto l_cExtraFrontendActionFactory =
             clang::tooling::newFrontendActionFactory< CExtraFrontendAction >();
 
-        l_returnValue = l_tool.run( l_cExtraFrontendActionFactory.get() );
+        l_returnValue =
+            ( l_tool.run( l_cExtraFrontendActionFactory.get() ) == 0 );
     }
 
 EXIT:
-    return ( l_returnValue );
+    traceExit();
+
+    return ( ( l_returnValue ) ? ( 0 ) : ( 1 ) );
 }
