@@ -123,6 +123,28 @@ auto main( int _argumentCount, char* _argumentVector[] ) -> int {
         }
 
         // TODO: Default compile arguments from clang driver
+#if 0
+        auto defaults = get_default_includes_from_driver("clang");
+        if (!defaults.empty()) {
+            // naive dedupe: track pairs we already added
+            for (size_t i = 0; i + 1 < defaults.size(); i += 2) {
+                const auto &flag = defaults[i];
+                const auto &path = defaults[i+1];
+
+                bool found = false;
+                for (size_t j = 0; j + 1 < g_compileArguments.size(); ++j) {
+                    if (g_compileArguments[j] == flag && g_compileArguments[j+1] == path) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    g_compileArguments.push_back(flag);
+                    g_compileArguments.push_back(path);
+                }
+            }
+        }
+#endif
 
         clang::tooling::FixedCompilationDatabase l_compilationDatabase(
             g_compilationSourceDirectory, g_compileArguments );
