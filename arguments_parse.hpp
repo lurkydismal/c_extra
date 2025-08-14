@@ -14,6 +14,7 @@ extern std::string g_extension;
 extern bool g_isQuietRun;
 extern bool g_isDryRun;
 extern bool g_needEditInPlace;
+extern bool g_needOnlyPrintResult;
 extern bool g_needDefaultIncludes;
 extern bool g_isCheckOnly;
 extern bool g_needTrace;

@@ -13,6 +13,8 @@
 
 #include "arguments_parse.hpp"
 #include "cextra_ast_consumer.hpp"
+#include "clang/Basic/LLVM.h"
+#include "llvm/Support/raw_ostream.h"
 #include "log.hpp"
 #include "trace.hpp"
 
@@ -93,7 +95,12 @@ static inline auto writeToFile( const clang::StringRef _filePath,
         goto EXIT;
     }
 
-    _theRewriter.getEditBuffer( _fileId ).write( l_outputFile );
+    {
+        llvm::raw_fd_ostream& l_outputStream =
+            ( ( g_needOnlyPrintResult ) ? ( llvm::outs() ) : ( l_outputFile ) );
+
+        _theRewriter.getEditBuffer( _fileId ).write( l_outputStream );
+    }
 
 EXIT:
     traceExit();

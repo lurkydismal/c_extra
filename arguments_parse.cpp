@@ -33,6 +33,7 @@ std::string g_extension;
 bool g_isQuietRun = false;
 bool g_isDryRun = false;
 bool g_needEditInPlace = false;
+bool g_needOnlyPrintResult = false;
 bool g_needDefaultIncludes = true;
 bool g_isCheckOnly = false;
 bool g_needTrace = false;
@@ -55,12 +56,13 @@ enum class parserOption : int16_t {
     inPlace = 'i',
     prefix = 'p',
     extension = 'e',
+    printResult = 1000,
     define = 'D',
     undefine = 'U',
     include = 'I',
-    disableDefaultIncludes = 1000,
+    disableDefaultIncludes = 1001,
     checkOnly = 'c',
-    trace = 1001,
+    trace = 1002,
 };
 
 static auto parserForOption( int _key, char* _value, struct argp_state* _state )
@@ -108,6 +110,12 @@ static auto parserForOption( int _key, char* _value, struct argp_state* _state )
 
         case ( int )parserOption::extension: {
             g_extension = _value;
+
+            break;
+        }
+
+        case ( int )parserOption::printResult: {
+            g_needOnlyPrintResult = true;
 
             break;
         }
@@ -227,8 +235,10 @@ auto parseArguments( int _argumentCount, char** _argumentVector ) -> bool {
                 { "stdin", 0, nullptr, 0,
                   "Read from standard input instead of file(s)", 1 },
                 // TODO: Implement
-                { "stdout", 0, nullptr, 0, "Write result to standard output",
-                  1 },
+                { "stdin-stream", 0, nullptr, 0,
+                  "Read stream from standard input instead of file(s)", 1 },
+                { "stdout", ( int )parserOption::printResult, nullptr, 0,
+                  "Write result to standard output", 1 },
                 // TODO: Implement
                 { "enable-feature", 'f', "NAME", 0,
                   "Enable a specific custom syntax/ feature", 2 },
