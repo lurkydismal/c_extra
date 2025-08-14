@@ -104,7 +104,7 @@ void SFuncHandler::run(
         if ( !l_rt )
             goto EXIT;
 
-        clang::RecordDecl* l_rd = l_rt->getDecl();
+        clang::RecordDecl* l_rd = l_rt->getOriginalDecl();
         if ( !l_rd )
             goto EXIT;
 

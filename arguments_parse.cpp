@@ -13,17 +13,8 @@ std::vector< std::string > g_compileArguments = {
 };
 const std::vector< std::string > g_defaultIncludes = {
     // Default includes
-    "-isystem",
-    "/usr/lib/clang/20/include",
-    "-isystem",
-    "/usr/bin/../lib64/gcc/x86_64-pc-linux-gnu/15.1.1/../../../../"
-    "x86_64-pc-linux-gnu/include",
-    "-isystem",
-    "/usr/local/include",
-    "-isystem",
-    "/include",
-    "-isystem",
-    "/usr/include",
+    "-isystem", "/usr/local/include", "-isystem",
+    "/include", "-isystem",           "/usr/include",
 };
 std::vector< std::string > g_sources;
 std::string g_prefix = ".";
@@ -35,6 +26,7 @@ bool g_isDryRun = false;
 bool g_needEditInPlace = false;
 bool g_needOnlyPrintResult = false;
 bool g_needDefaultIncludes = true;
+bool g_needDefaultSystemIncludes = true;
 bool g_isCheckOnly = false;
 bool g_needTrace = false;
 
@@ -61,8 +53,9 @@ enum class parserOption : int16_t {
     undefine = 'U',
     include = 'I',
     disableDefaultIncludes = 1001,
+    disableDefaultSystemIncludes = 1002,
     checkOnly = 'c',
-    trace = 1002,
+    trace = 1003,
 };
 
 static auto parserForOption( int _key, char* _value, struct argp_state* _state )
@@ -149,6 +142,12 @@ static auto parserForOption( int _key, char* _value, struct argp_state* _state )
 
         case ( int )parserOption::disableDefaultIncludes: {
             g_needDefaultIncludes = false;
+
+            break;
+        }
+
+        case ( int )parserOption::disableDefaultSystemIncludes: {
+            g_needDefaultSystemIncludes = false;
 
             break;
         }
@@ -254,6 +253,9 @@ auto parseArguments( int _argumentCount, char** _argumentVector ) -> bool {
                 { "disable-default-includes",
                   ( int )parserOption::disableDefaultIncludes, nullptr, 0,
                   "Disable default include paths", 2 },
+                { "disable-default-system-includes",
+                  ( int )parserOption::disableDefaultSystemIncludes, nullptr, 0,
+                  "Disable default system include paths", 2 },
                 // TODO: Implement
                 { "warnings-as-errors", 'W', nullptr, 0,
                   "Treat all warnings as errors", 2 },

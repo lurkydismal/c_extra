@@ -4,9 +4,9 @@
 
 #include "arguments_parse.hpp"
 
-#define LOG_INFO_FORMAT                                                     \
-    "\"" << __FUNCTION__ << "\"" << " " << __FILE_NAME__ << ":" << __LINE__ \
-         << " | "
+#define LOG_INFO_FORMAT                                                \
+    "\"" << __PRETTY_FUNCTION__ << "\"" << " " << __FILE_NAME__ << ":" \
+         << __LINE__ << " | "
 
 // Function file:line | message
 #define log( _message )                                              \
