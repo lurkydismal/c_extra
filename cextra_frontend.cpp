@@ -173,7 +173,7 @@ void CExtraFrontendAction::EndSourceFileAction() {
                     l_outputPath = l_filePath;
                 }
 
-                writeToFile( l_filePath, l_fileId, _theRewriter );
+                writeToFile( l_outputPath, l_fileId, _theRewriter );
             }
         }
     }
