@@ -6,6 +6,7 @@
 
 #include "arguments_parse.hpp"
 #include "cextra_frontend.hpp"
+#include "llvm/Option/Option.h"
 #include "trace.hpp"
 
 class IgnoreDiagnostics : public clang::DiagnosticConsumer {
@@ -21,51 +22,46 @@ public:
 static inline auto getDefaultSystemIncludesFromDriver()
     -> std::vector< std::string > {
     traceEnter();
-    std::vector< std::string > l_includes;
 
-    IgnoreDiagnostics l_ignoreDiagnostics;
+    std::vector< std::string > l_returnValue;
+
+    llvm::vfs::InMemoryFileSystem l_vfs = llvm::vfs::InMemoryFileSystem();
     clang::DiagnosticOptions l_diagnosticsOptions;
+    IgnoreDiagnostics l_ignoreDiagnostics;
 
-    clang::IntrusiveRefCntPtr< clang::DiagnosticsEngine > l_diagnostics =
+    const clang::IntrusiveRefCntPtr< clang::DiagnosticsEngine > l_diagnostics =
         clang::CompilerInstance::createDiagnostics(
-            *llvm::vfs::getRealFileSystem(), l_diagnosticsOptions,
-            &l_ignoreDiagnostics, false );
+            l_vfs, l_diagnosticsOptions, &l_ignoreDiagnostics, false );
 
     clang::driver::Driver l_driver(
         "clang", llvm::sys::getDefaultTargetTriple(), *l_diagnostics );
 
-    std::vector< const char* > l_arguments = { "clang", "-E", "-x", "c",
-                                               "/dev/null" };
-
-    auto l_compilation = l_driver.BuildCompilation( l_arguments );
+    const auto l_compilation =
+        l_driver.BuildCompilation( { "clang", "-E", "-x", "c", "/dev/null" } );
 
     if ( !l_compilation ) {
         goto EXIT;
     }
 
-    for ( const auto& l_compilationJob : l_compilation->getJobs() ) {
-        if ( const auto* l_compilationJobCommand =
-                 llvm::dyn_cast< clang::driver::Command >(
-                     &l_compilationJob ) ) {
-            const auto& l_commandArguments =
-                l_compilationJobCommand->getArguments();
-            const size_t l_commandArgumentsSize = l_commandArguments.size();
+    for ( const clang::driver::Command& l_compilationJobCommand :
+          l_compilation->getJobs() ) {
+        const llvm::opt::ArgStringList& l_commandArguments =
+            l_compilationJobCommand.getArguments();
 
-            for ( size_t l_commandArgumentIndex = 0;
-                  l_commandArgumentIndex < l_commandArgumentsSize;
-                  ++l_commandArgumentIndex ) {
-                const llvm::StringRef l_argument =
-                    l_commandArguments[ l_commandArgumentIndex ];
+        for ( size_t l_commandArgumentIndex = 0;
+              ( ( l_commandArgumentIndex + 1 ) < l_commandArguments.size() );
+              ++l_commandArgumentIndex ) {
+            const llvm::StringRef l_argument =
+                l_commandArguments[ l_commandArgumentIndex ];
 
-                if ( ( l_argument == "-internal-isystem" ) &&
-                     ( ( l_commandArgumentIndex + 1 ) <
-                       l_commandArgumentsSize ) ) {
-                    l_includes.emplace_back( "-isystem" );
-                    l_includes.emplace_back(
-                        l_commandArguments[ l_commandArgumentIndex + 1 ] );
+            if ( l_argument == "-internal-isystem" ) {
+                l_returnValue.reserve( 2 );
 
-                    l_commandArgumentIndex++;
-                }
+                l_returnValue.emplace_back( "-isystem" );
+                l_returnValue.emplace_back(
+                    l_commandArguments[ l_commandArgumentIndex + 1 ] );
+
+                l_commandArgumentIndex++;
             }
         }
     }
@@ -73,7 +69,7 @@ static inline auto getDefaultSystemIncludesFromDriver()
 EXIT:
     traceExit();
 
-    return ( l_includes );
+    return ( l_returnValue );
 }
 
 auto main( int _argumentCount, char* _argumentVector[] ) -> int {
