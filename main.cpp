@@ -54,16 +54,34 @@ static inline auto getDefaultSystemIncludesFromDriver()
             const llvm::StringRef l_argument =
                 l_commandArguments[ l_commandArgumentIndex ];
 
-            if ( l_argument == "-internal-isystem" ) {
+            if ( ( l_argument == "-internal-isystem" ) ||
+                 ( l_argument == "-internal-externc-isystem" ) ) {
+                std::string l_includePath =
+                    l_commandArguments[ l_commandArgumentIndex + 1 ];
+
+                if ( l_includePath[ 0 ] != '/' ) {
+                    std::string l_includePathWithPrefix = "/";
+                    l_includePathWithPrefix.append( l_includePath );
+
+                    l_includePath = l_includePathWithPrefix;
+                }
+
                 l_returnValue.reserve( 2 );
 
                 l_returnValue.emplace_back( "-isystem" );
-                l_returnValue.emplace_back(
-                    l_commandArguments[ l_commandArgumentIndex + 1 ] );
+                l_returnValue.emplace_back( l_includePath );
 
                 l_commandArgumentIndex++;
             }
         }
+    }
+
+    // FIX: Remove
+    {
+        l_returnValue.reserve( 2 );
+
+        l_returnValue.emplace_back( "-isystem" );
+        l_returnValue.emplace_back( "/lib/clang/20/include" );
     }
 
 EXIT:
@@ -91,6 +109,19 @@ auto main( int _argumentCount, char* _argumentVector[] ) -> int {
             g_compileArguments.insert( g_compileArguments.end(),
                                        l_defaultSystemIncludes.begin(),
                                        l_defaultSystemIncludes.end() );
+        }
+
+        // TODO: Enable on verbose
+        if ( false ) {
+            std::string l_compileArgumentsAsString;
+
+            for ( const clang::StringRef l_compileArgument :
+                  g_compileArguments ) {
+                l_compileArgumentsAsString.append( l_compileArgument );
+                l_compileArgumentsAsString.append( " " );
+            }
+
+            log( l_compileArgumentsAsString );
         }
 
         clang::tooling::FixedCompilationDatabase l_compilationDatabase(

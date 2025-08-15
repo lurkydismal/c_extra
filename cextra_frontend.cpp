@@ -21,8 +21,8 @@
 #if 0
 class MacroNameReplacer : public clang::PPCallbacks {
 public:
-    MacroNameReplacer( clang::Rewriter& _r, clang::SourceManager& _sm )
-        : _theRewriter( _r ), _sm( _sm ) {}
+    MacroNameReplacer( clang::Rewriter& _rewriter, clang::SourceManager& _sm )
+        : _rewriter( _rewriter ), _sm( _sm ) {}
 
     void MacroExpands( const clang::Token& _macroNameTok,
                        const clang::MacroDefinition& _md,
@@ -32,12 +32,12 @@ public:
         clang::StringRef l_macroName = _macroNameTok.getIdentifierInfo()->getName();
 
         // Replace macro usage with "MACRO_NAME"
-        _theRewriter.ReplaceText( l_loc, l_macroName.size(),
+        _rewriter.ReplaceText( l_loc, l_macroName.size(),
                                   "\"" + l_macroName.str() + "\"" );
     }
 
 private:
-    clang::Rewriter& _theRewriter;
+    clang::Rewriter& _rewriter;
     clang::SourceManager& _sm;
 };
 #endif
@@ -48,12 +48,12 @@ auto CExtraFrontendAction::CreateASTConsumer(
     -> std::unique_ptr< clang::ASTConsumer > {
     traceEnter();
 
-    _theRewriter.setSourceMgr( _compilerInstance.getSourceManager(),
-                               _compilerInstance.getLangOpts() );
+    _rewriter.setSourceMgr( _compilerInstance.getSourceManager(),
+                            _compilerInstance.getLangOpts() );
 
     traceExit();
 
-    return ( std::make_unique< CExtraASTConsumer >( _theRewriter ) );
+    return ( std::make_unique< CExtraASTConsumer >( _rewriter ) );
 }
 
 #if 0
@@ -62,22 +62,22 @@ void CExtraFrontendAction::ExecuteAction() override {
     Preprocessor& l_pp = l_ci.getPreprocessor();
     SourceManager& l_sm = l_ci.getSourceManager();
 
-    _theRewriter.setSourceMgr( l_sm, l_ci.getLangOpts() );
+    _rewriter.setSourceMgr( l_sm, l_ci.getLangOpts() );
     l_pp.addPPCallbacks(
-        std::make_unique< MacroNameReplacer >( _theRewriter, l_sm ) );
+        std::make_unique< MacroNameReplacer >( _rewriter, l_sm ) );
 
     // Run normal compilation to trigger macro expansion
     ASTFrontendAction::ExecuteAction();
 
     // Output modified code
-    _theRewriter.getEditBuffer( l_sm.getMainFileID() )
+    _rewriter.getEditBuffer( l_sm.getMainFileID() )
         .write( llvm::outs() );
 }
 #endif
 
 static inline auto writeToFile( const clang::StringRef _filePath,
                                 const clang::FileID& _fileId,
-                                clang::Rewriter& _theRewriter ) -> bool {
+                                clang::Rewriter& _rewriter ) -> bool {
     traceEnter();
 
     bool l_returnValue = false;
@@ -99,7 +99,7 @@ static inline auto writeToFile( const clang::StringRef _filePath,
         llvm::raw_fd_ostream& l_outputStream =
             ( ( g_needOnlyPrintResult ) ? ( llvm::outs() ) : ( l_outputFile ) );
 
-        _theRewriter.getEditBuffer( _fileId ).write( l_outputStream );
+        _rewriter.getEditBuffer( _fileId ).write( l_outputStream );
     }
 
 EXIT:
@@ -121,8 +121,7 @@ void CExtraFrontendAction::EndSourceFileAction() {
     }
 
     {
-        const clang::SourceManager& l_sourceManager =
-            _theRewriter.getSourceMgr();
+        const clang::SourceManager& l_sourceManager = _rewriter.getSourceMgr();
 
         const clang::FileID l_fileId = l_sourceManager.getMainFileID();
         const clang::StringRef l_inputFile =
@@ -180,7 +179,7 @@ void CExtraFrontendAction::EndSourceFileAction() {
                     l_outputPath = l_filePath;
                 }
 
-                writeToFile( l_outputPath, l_fileId, _theRewriter );
+                writeToFile( l_outputPath, l_fileId, _rewriter );
             }
         }
     }

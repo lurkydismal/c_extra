@@ -3,13 +3,16 @@
 #include <clang/ASTMatchers/ASTMatchFinder.h>
 #include <clang/Rewrite/Core/Rewriter.h>
 
-class SFuncHandler : public clang::ast_matchers::MatchFinder::MatchCallback {
-public:
-    SFuncHandler( clang::Rewriter& _r );
+using namespace clang::ast_matchers;
 
-    void run(
-        const clang::ast_matchers::MatchFinder::MatchResult& _result ) override;
+class IterateStructHandler : public MatchFinder::MatchCallback {
+public:
+    IterateStructHandler( clang::Rewriter& _rewriter );
+
+    void run( const MatchFinder::MatchResult& _result ) override;
+
+    static void addMatcher( MatchFinder& _matcher, clang::Rewriter& _rewriter );
 
 private:
-    clang::Rewriter& _theRewriter;
+    clang::Rewriter& _rewriter;
 };

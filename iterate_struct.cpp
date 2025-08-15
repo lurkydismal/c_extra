@@ -1,20 +1,22 @@
 #include "iterate_struct.hpp"
 
-#include <clang/AST/Expr.h>
-#include <clang/ASTMatchers/ASTMatchers.h>
 #include <clang/Lex/Lexer.h>
+
+#include <memory>
 
 #include "log.hpp"
 #include "trace.hpp"
 
-SFuncHandler::SFuncHandler( clang::Rewriter& _r ) : _theRewriter( _r ) {
+using namespace clang::ast_matchers;
+
+IterateStructHandler::IterateStructHandler( clang::Rewriter& _rewriter )
+    : _rewriter( _rewriter ) {
     traceEnter();
 
     traceExit();
 }
 
-void SFuncHandler::run(
-    const clang::ast_matchers::MatchFinder::MatchResult& _result ) {
+void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
     traceEnter();
 
     const auto* l_call =
@@ -133,6 +135,7 @@ void SFuncHandler::run(
         if ( l_baseRange.isValid() ) {
             llvm::Expected< llvm::StringRef > l_maybeText =
                 clang::Lexer::getSourceText( l_baseRange, l_sm, l_lo );
+
             if ( l_maybeText ) {
                 l_baseExprText = l_maybeText->str();
                 l_gotBaseText = true;
@@ -256,9 +259,56 @@ void SFuncHandler::run(
             clang::CharSourceRange::getCharRange( l_call->getBeginLoc(),
                                                   l_replaceEnd );
 
-        _theRewriter.ReplaceText( l_toReplace, l_replacementText );
+        if ( l_replaceEnd.isValid() &&
+             _rewriter.getSourceMgr().isWrittenInMainFile(
+                 l_toReplace.getBegin() ) ) {
+            std::string l_rewritten =
+                _rewriter.getRewrittenText( l_replaceEnd );
+            if ( l_rewritten.empty() ) {
+                llvm::errs() << "Rewritten text is empty.\n";
+            } else {
+                llvm::errs() << "Rewritten text: " << l_rewritten << "\n";
+            }
+        } else {
+            llvm::errs() << "Invalid or non-main file range.\n";
+        }
+
+        _rewriter.ReplaceText( l_toReplace, l_replacementText );
     }
 
 EXIT:
+    traceExit();
+}
+
+void IterateStructHandler::addMatcher( MatchFinder& _matcher,
+                                       clang::Rewriter& _rewriter ) {
+    traceEnter();
+
+    auto l_handler = std::make_unique< IterateStructHandler >( _rewriter );
+
+    auto l_isRecordType = qualType( hasCanonicalType( recordType() ) );
+
+    // Match calls to sFunc(&struct, "callback")
+    _matcher.addMatcher(
+        callExpr(
+            callee( functionDecl( hasName( "sFunc" ) ) ),
+            hasArgument(
+                0,
+                anyOf(
+                    // Record (struct)
+                    unaryOperator( hasOperatorName( "&" ),
+                                   hasUnaryOperand( ignoringParenImpCasts(
+                                       declRefExpr( to( varDecl( hasType(
+                                                        l_isRecordType ) ) ) )
+                                           .bind( "addrDeclRef" ) ) ) ),
+
+                    // Pointer to record (struct*)
+                    declRefExpr(
+                        to( varDecl( hasType( pointsTo( l_isRecordType ) ) ) ) )
+                        .bind( "ptrDeclRef" ) ) ),
+            hasArgument( 1, stringLiteral().bind( "macroStr" ) ) )
+            .bind( "sFuncCall" ),
+        l_handler.release() );
+
     traceExit();
 }

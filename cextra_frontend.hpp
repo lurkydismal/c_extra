@@ -17,5 +17,5 @@ public:
     void EndSourceFileAction() override;
 
 private:
-    clang::Rewriter _theRewriter;
+    clang::Rewriter _rewriter;
 };
