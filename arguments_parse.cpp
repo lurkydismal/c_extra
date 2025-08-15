@@ -165,7 +165,9 @@ static auto parserForOption( int _key, char* _value, struct argp_state* _state )
         }
 
         case ARGP_KEY_ARG: {
-            g_sources.emplace_back( _value );
+            if ( _value ) {
+                g_sources.emplace_back( _value );
+            }
 
             break;
         }
