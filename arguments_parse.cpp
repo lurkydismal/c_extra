@@ -25,8 +25,8 @@ bool g_isQuietRun = false;
 bool g_isDryRun = false;
 bool g_needEditInPlace = false;
 bool g_needOnlyPrintResult = false;
-bool g_needDefaultIncludes = true;
-bool g_needDefaultSystemIncludes = true;
+bool g_needDefaultIncludePaths = true;
+bool g_needDefaultSystemIncludePaths = true;
 bool g_isCheckOnly = false;
 bool g_needTrace = false;
 
@@ -141,13 +141,13 @@ static auto parserForOption( int _key, char* _value, struct argp_state* _state )
         }
 
         case ( int )parserOption::disableDefaultIncludes: {
-            g_needDefaultIncludes = false;
+            g_needDefaultIncludePaths = false;
 
             break;
         }
 
         case ( int )parserOption::disableDefaultSystemIncludes: {
-            g_needDefaultSystemIncludes = false;
+            g_needDefaultSystemIncludePaths = false;
 
             break;
         }
@@ -175,7 +175,10 @@ static auto parserForOption( int _key, char* _value, struct argp_state* _state )
                 argp_error( _state, "No input(s) provided." );
             }
 
-            if ( g_needDefaultIncludes ) {
+            // Only append default include paths if default system include paths
+            // will not be added
+            if ( g_needDefaultIncludePaths &&
+                 !g_needDefaultSystemIncludePaths ) {
                 g_compileArguments.insert( g_compileArguments.end(),
                                            g_defaultIncludes.begin(),
                                            g_defaultIncludes.end() );
@@ -236,6 +239,9 @@ auto parseArguments( int _argumentCount, char** _argumentVector ) -> bool {
                 // TODO: Implement
                 { "stdin-stream", 0, nullptr, 0,
                   "Read stream from standard input instead of file(s)", 1 },
+                // TODO: Implement
+                { "stdin-disable-helpers", 0, nullptr, 0,
+                  "Do not include helpers header file before input", 1 },
                 { "stdout", ( int )parserOption::printResult, nullptr, 0,
                   "Write result to standard output", 1 },
                 // TODO: Implement

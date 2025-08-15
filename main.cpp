@@ -84,7 +84,7 @@ auto main( int _argumentCount, char* _argumentVector[] ) -> int {
             goto EXIT;
         }
 
-        if ( g_needDefaultSystemIncludes ) {
+        if ( g_needDefaultSystemIncludePaths ) {
             std::vector< std::string > l_defaultSystemIncludes =
                 getDefaultSystemIncludesFromDriver();
 
