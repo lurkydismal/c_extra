@@ -1,4 +1,4 @@
-#include "iterate_struct.hpp"
+#include "iterate_struct_union.hpp"
 
 #include <clang/Lex/Lexer.h>
 
@@ -9,14 +9,15 @@
 
 using namespace clang::ast_matchers;
 
-IterateStructHandler::IterateStructHandler( clang::Rewriter& _rewriter )
+IterateStructUnionHandler::IterateStructUnionHandler(
+    clang::Rewriter& _rewriter )
     : _rewriter( _rewriter ) {
     traceEnter();
 
     traceExit();
 }
 
-void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
+void IterateStructUnionHandler::run( const MatchFinder::MatchResult& _result ) {
     traceEnter();
 
     clang::SourceManager& l_sm = *( _result.SourceManager );
@@ -37,13 +38,14 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
             return ( _fallback );
         }
 
-        clang::StringRef l_txt = clang::Lexer::getSourceText( l_r, l_sm, l_lo );
+        clang::Expected< clang::StringRef > l_txt =
+            clang::Lexer::getSourceText( l_r, l_sm, l_lo );
 
-        if ( !l_txt.empty() ) {
+        if ( l_txt ) {
             // TODO: Test
             traceExit();
 
-            return ( l_txt.str() );
+            return ( l_txt->str() );
         }
 
         return ( _fallback );
@@ -101,41 +103,203 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
             _result.Nodes.getNodeAs< clang::DeclRefExpr >( "addrDeclRef" );
         const auto* l_ptrDeclRef =
             _result.Nodes.getNodeAs< clang::DeclRefExpr >( "ptrDeclRef" );
+        const auto* l_arrayDeclRef =
+            _result.Nodes.getNodeAs< clang::DeclRefExpr >( "arrayDeclRef" );
+        const auto* l_callExprPtr =
+            _result.Nodes.getNodeAs< clang::CallExpr >( "callExprPtr" );
 
-        if ( !l_addrDeclRef && !l_ptrDeclRef ) {
-            logError( "No addrDeclRef or ptrDeclRef bound." );
+        const auto* l_castToPtr =
+            _result.Nodes.getNodeAs< clang::CStyleCastExpr >( "castToPtr" );
+        const auto* l_castDeclRef =
+            _result.Nodes.getNodeAs< clang::DeclRefExpr >( "castDeclRef" );
+        const auto* l_castCallExpr =
+            _result.Nodes.getNodeAs< clang::CallExpr >( "castCallExpr" );
+        const auto* l_castMemberExpr =
+            _result.Nodes.getNodeAs< clang::MemberExpr >( "castMemberExpr" );
+
+        // Prepare variables to fill
+        std::string l_baseExprText;
+        logVariable( l_baseExprText ); // log after we overwrite below as
+                                       // required (no-op now)
+
+        bool l_pointerPassed = false;
+        logVariable( l_pointerPassed ); // logged below immediately after actual
+                                        // assignment
+
+        clang::QualType l_recordQt;
+        const clang::VarDecl* l_varDecl = nullptr;
+
+        // Order of precedence: explicit address-of var, pointer var, array var,
+        // cast-to-pointer (if casted-from declref), callExpr returning ptr,
+        // cast-to-pointer general.
+        if ( l_addrDeclRef ) {
+            // &var  -> base is var, pointerPassed = false
+            l_pointerPassed = false;
+
+            logVariable( l_pointerPassed );
+
+            l_varDecl =
+                llvm::dyn_cast< clang::VarDecl >( l_addrDeclRef->getDecl() );
+
+            if ( !l_varDecl ) {
+                logError( "addrDeclRef does not refer to a VarDecl" );
+
+                goto EXIT;
+            }
+
+            logVariable( l_varDecl );
+
+            l_baseExprText = l_getSourceTextOrFallback(
+                l_addrDeclRef, l_varDecl->getNameAsString() );
+
+            logVariable( l_baseExprText );
+
+            l_recordQt =
+                l_getRecordTypeFromVar( l_varDecl, /*pointerPassed=*/false );
+
+            logVariable( l_recordQt );
+
+        } else if ( l_ptrDeclRef ) {
+            // pointer variable passed -> base is var, pointerPassed = true
+            l_pointerPassed = true;
+
+            logVariable( l_pointerPassed );
+
+            l_varDecl =
+                llvm::dyn_cast< clang::VarDecl >( l_ptrDeclRef->getDecl() );
+
+            if ( !l_varDecl ) {
+                logError( "ptrDeclRef does not refer to a VarDecl" );
+
+                goto EXIT;
+            }
+
+            logVariable( l_varDecl );
+
+            l_baseExprText = l_getSourceTextOrFallback(
+                l_ptrDeclRef, l_varDecl->getNameAsString() );
+
+            logVariable( l_baseExprText );
+
+            l_recordQt =
+                l_getRecordTypeFromVar( l_varDecl, /*pointerPassed=*/true );
+
+            logVariable( l_recordQt );
+
+        } else if ( l_arrayDeclRef ) {
+            // array variable passed (decays to pointer)
+            l_pointerPassed = true;
+
+            logVariable( l_pointerPassed );
+
+            l_varDecl =
+                llvm::dyn_cast< clang::VarDecl >( l_arrayDeclRef->getDecl() );
+
+            if ( !l_varDecl ) {
+                logError( "arrayDeclRef does not refer to a VarDecl" );
+
+                goto EXIT;
+            }
+
+            logVariable( l_varDecl );
+
+            l_baseExprText = l_getSourceTextOrFallback(
+                l_arrayDeclRef, l_varDecl->getNameAsString() );
+
+            logVariable( l_baseExprText );
+
+            // Extract element type from array type
+            if ( const clang::Type* l_tp =
+                     l_varDecl->getType().getTypePtrOrNull() ) {
+                if ( const auto* l_at =
+                         llvm::dyn_cast< clang::ArrayType >( l_tp ) ) {
+                    l_recordQt = l_at->getElementType().getUnqualifiedType();
+
+                } else {
+                    // fallback: try unwrapping typedefs (defensive)
+                    l_recordQt = l_getRecordTypeFromVar(
+                        l_varDecl, /*pointerPassed=*/false );
+                }
+
+            } else {
+                l_recordQt = l_getRecordTypeFromVar( l_varDecl,
+                                                     /*pointerPassed=*/false );
+            }
+            logVariable( l_recordQt );
+
+        } else if ( l_callExprPtr ) {
+            // call expression that returns struct* (e.g. getStructPtr())
+            l_pointerPassed = true;
+            logVariable( l_pointerPassed );
+
+            l_baseExprText = l_getSourceTextOrFallback( l_callExprPtr, "" );
+            logVariable( l_baseExprText );
+
+            clang::QualType l_t = l_callExprPtr->getType();
+            if ( !l_t.isNull() ) {
+                l_recordQt = l_t->getPointeeType().getUnqualifiedType();
+            }
+            logVariable( l_recordQt );
+
+        } else if ( l_castToPtr ) {
+            // explicit cast to struct* (we matched
+            // hasDestinationType(pointer-to-record))
+            l_pointerPassed = true;
+            logVariable( l_pointerPassed );
+
+            // destination type's pointee is the record type
+            clang::QualType l_castDest = l_castToPtr->getType();
+
+            if ( !l_castDest.isNull() ) {
+                l_recordQt = l_castDest->getPointeeType().getUnqualifiedType();
+            }
+
+            logVariable( l_recordQt );
+
+            // Prefer a bound inner decl (if matcher gave us castDeclRef)
+            if ( l_castDeclRef ) {
+                l_varDecl = llvm::dyn_cast< clang::VarDecl >(
+                    l_castDeclRef->getDecl() );
+
+                if ( l_varDecl ) {
+                    logVariable( l_varDecl );
+
+                    l_baseExprText = l_getSourceTextOrFallback(
+                        l_castDeclRef, l_varDecl->getNameAsString() );
+
+                    logVariable( l_baseExprText );
+                }
+            }
+
+            // Else if casted-from call expression
+            if ( l_baseExprText.empty() && l_castCallExpr ) {
+                l_baseExprText =
+                    l_getSourceTextOrFallback( l_castCallExpr, "" );
+
+                logVariable( l_baseExprText );
+            }
+
+            // Else if casted-from member expression
+            if ( l_baseExprText.empty() && l_castMemberExpr ) {
+                l_baseExprText =
+                    l_getSourceTextOrFallback( l_castMemberExpr, "" );
+
+                logVariable( l_baseExprText );
+            }
+
+            // As a final fallback, use the whole cast expression text
+            if ( l_baseExprText.empty() ) {
+                l_baseExprText = l_getSourceTextOrFallback( l_castToPtr, "" );
+
+                logVariable( l_baseExprText );
+            }
+        } else {
+            // nothing matched (shouldn't happen if matcher and bindings are
+            // correct)
+            logError( "No matching first-argument pattern found." );
 
             goto EXIT;
         }
-
-        const bool l_pointerPassed = ( l_ptrDeclRef != nullptr );
-
-        logVariable( l_pointerPassed );
-
-        const clang::DeclRefExpr* l_baseDeclRef =
-            ( ( l_ptrDeclRef ) ? ( l_ptrDeclRef ) : ( l_addrDeclRef ) );
-
-        logVariable( l_baseDeclRef );
-
-        if ( !l_baseDeclRef ) {
-            goto EXIT;
-        }
-
-        const auto* l_varDecl =
-            llvm::dyn_cast< clang::VarDecl >( l_baseDeclRef->getDecl() );
-
-        if ( !l_varDecl ) {
-            logError( "Base decl is not a VarDecl." );
-
-            goto EXIT;
-        }
-
-        logVariable( l_varDecl );
-
-        clang::QualType l_recordQt =
-            l_getRecordTypeFromVar( l_varDecl, l_pointerPassed );
-
-        logVariable( l_recordQt );
 
         if ( l_recordQt.isNull() ) {
             logError( "Record type is null." );
@@ -178,13 +342,8 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
 
         logVariable( l_rd );
 
-        std::string l_baseExprText = l_getSourceTextOrFallback(
-            l_baseDeclRef, l_varDecl->getNameAsString() );
-
-        logVariable( l_baseExprText );
-
-        //  Determine indentation from call location (use spelling loc for
-        //  column)
+        // Determine indentation from call location (use spelling loc for
+        // column)
         clang::SourceLocation l_startLoc =
             l_sm.getSpellingLoc( l_call->getBeginLoc() );
         unsigned l_col = l_sm.getSpellingColumnNumber( l_startLoc );
@@ -193,12 +352,8 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
         // Prepare replacement
         std::string l_replacementText;
 
-        // Get a reasonable textual representation of the record type for
-        // offsetof/sizeof. Prefer the printed QualType (may include "struct
-        // ..." or typedef name).
+        // offsetof/ sizeof
         std::string l_recordTypeStr;
-
-        // llvm::dyn_cast< clang::TypedefType >( l_recordQt ) ) {
 
         if ( const auto* l_tdt = l_recordQt->getAs< clang::TypedefType >() ) {
             l_recordTypeStr = l_tdt->getDecl()->getNameAsString();
@@ -212,15 +367,8 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
         llvm::raw_string_ostream l_ss( l_replacementText );
 
         auto l_appendFieldLine = [ & ]( const clang::FieldDecl* _fd ) {
-            if ( !_fd ) {
-                return;
-            }
-
-            if ( _fd->isUnnamedBitField() ) {
-                return;
-            }
-
-            if ( !_fd->getIdentifier() ) {
+            if ( ( !_fd ) || ( _fd->isUnnamedBitField() ) ||
+                 ( !_fd->getIdentifier() ) ) {
                 return;
             }
 
@@ -237,12 +385,15 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
                       : ( l_baseExprText + "." + l_fname ) );
             std::string l_fieldRef = ( "&(" + l_memberAccess + ")" );
 
+            // callbackName( "fieldName", "fieldType", &(variable->field),
+            // __builtin_offsetof( structType, field ), sizeof( ( (structType*)
+            // 0)->field ) );
             l_ss << l_indent << l_callbackName << "(\"" << l_fname << "\", "
                  << "\"" << l_ftype << "\", " << l_fieldRef << ", "
                  << "__builtin_offsetof(" << l_recordTypeStr << ", " << l_fname
                  << "), "
                  << "sizeof(((" << l_recordTypeStr << "*)0)->" << l_fname
-                 << "));";
+                 << "));\n";
         };
 
         for ( const clang::FieldDecl* l_fd : l_rd->fields() ) {
@@ -250,6 +401,12 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
         }
 
         l_ss.flush();
+
+        l_replacementText.erase( 0, l_indent.length() );
+
+        if ( !l_replacementText.empty() && l_replacementText.back() == '\n' ) {
+            l_replacementText.pop_back();
+        }
 
         logVariable( l_replacementText );
 
@@ -313,11 +470,11 @@ EXIT:
     traceExit();
 }
 
-void IterateStructHandler::addMatcher( MatchFinder& _matcher,
-                                       clang::Rewriter& _rewriter ) {
+void IterateStructUnionHandler::addMatcher( MatchFinder& _matcher,
+                                            clang::Rewriter& _rewriter ) {
     traceEnter();
 
-    auto l_handler = std::make_unique< IterateStructHandler >( _rewriter );
+    auto l_handler = std::make_unique< IterateStructUnionHandler >( _rewriter );
 
     // Canonical record type matcher (handles typedefs/quals)
     auto l_isRecordType = qualType( hasCanonicalType( recordType() ) );
@@ -369,7 +526,7 @@ void IterateStructHandler::addMatcher( MatchFinder& _matcher,
 
     // Match calls to iterate_struct_union(&struct, "callback")
     _matcher.addMatcher(
-        callExpr( callee( functionDecl( hasName( "sFunc" ) ) ),
+        callExpr( callee( functionDecl( hasAnyName( "sFunc", "ssFunc" ) ) ),
                   hasArgument( 0, l_firstArgument ),
                   hasArgument( 1, stringLiteral().bind( "macroStr" ) ) )
             .bind( "sFuncCall" ),

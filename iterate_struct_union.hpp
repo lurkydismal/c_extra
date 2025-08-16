@@ -5,9 +5,9 @@
 
 using namespace clang::ast_matchers;
 
-class IterateStructHandler : public MatchFinder::MatchCallback {
+class IterateStructUnionHandler : public MatchFinder::MatchCallback {
 public:
-    IterateStructHandler( clang::Rewriter& _rewriter );
+    IterateStructUnionHandler( clang::Rewriter& _rewriter );
 
     void run( const MatchFinder::MatchResult& _result ) override;
 
