@@ -159,7 +159,15 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
         // Get a reasonable textual representation of the record type for
         // offsetof/sizeof. Prefer the printed QualType (may include "struct
         // ..." or typedef name).
-        std::string l_recordTypeStr = l_recordQt.getAsString();
+        std::string l_recordTypeStr;
+
+        if ( const auto* l_tst =
+                 llvm::dyn_cast< clang::TypedefType >( l_recordQt ) ) {
+            l_recordTypeStr = l_tst->getDecl()->getNameAsString();
+
+        } else {
+            l_recordTypeStr = l_recordQt.getAsString();
+        }
 
         for ( const clang::FieldDecl* l_field : l_rd->fields() ) {
             if ( l_field->isUnnamedBitField() ) {
