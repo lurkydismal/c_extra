@@ -35,14 +35,15 @@ Depends on callback.
 ### **Thread Safety/ Reentrancy**
 
 <!-- Mention whether the function is thread-safe or reentrant. -->
-Depends on callback.
+Depends on iterable and callback.
 
 ### **Error Handling**
 
 <!-- How the function handles errors. -->
 <!-- Any `errno` values set. -->
 <!-- Return value conventions (e.g., negative on error). -->
-Error-exempt.
+iterable must be a valid pointer to a `struct`.
+On precondition violation processing aborts.
 
 ### **Examples/ Usage**
 
