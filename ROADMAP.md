@@ -150,5 +150,4 @@ Each milestone contains:
 
 ## Contributing
 
-<!-- TODO: Add contributing -->
-If you want to help or suggest features, please see [contributing](CONTRIBUTING).
+If you want to help or suggest features, please see *contributing*.

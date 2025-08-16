@@ -19,3 +19,6 @@
 
 // Function file:line | message
 #define logError( _message ) llvm::errs() << ( _message ) << "\n";
+
+// TODO: Implement
+#define logVariable( _variable ) log( #_variable );
