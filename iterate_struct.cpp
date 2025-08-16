@@ -19,6 +19,60 @@ IterateStructHandler::IterateStructHandler( clang::Rewriter& _rewriter )
 void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
     traceEnter();
 
+    clang::SourceManager& l_sm = *( _result.SourceManager );
+    clang::LangOptions l_lo = _result.Context->getLangOpts();
+
+    // Helper: get token-range source text for an Expr, fallback on 'fallback'
+    auto l_getSourceTextOrFallback =
+        [ & ]( const clang::Expr* _e,
+               const std::string& _fallback ) -> std::string {
+        if ( !_e ) {
+            return ( _fallback );
+        }
+
+        clang::CharSourceRange l_r =
+            clang::CharSourceRange::getTokenRange( _e->getSourceRange() );
+
+        if ( !l_r.isValid() ) {
+            return ( _fallback );
+        }
+
+        clang::StringRef l_txt = clang::Lexer::getSourceText( l_r, l_sm, l_lo );
+
+        if ( !l_txt.empty() ) {
+            // TODO: Test
+            traceExit();
+            return ( l_txt.str() );
+        }
+
+        return ( _fallback );
+    };
+
+    // Helper: extract the underlying record QualType from a VarDecl.
+    // If pointerPassed==true, try to return pointee type.
+    auto l_getRecordTypeFromVar = [ & ](
+                                      const clang::VarDecl* _vd,
+                                      bool _pointerPassed ) -> clang::QualType {
+        if ( !_vd )
+            return {};
+
+        clang::QualType l_qt = _vd->getType();
+
+        if ( _pointerPassed ) {
+            if ( l_qt->isPointerType() ) {
+                return ( l_qt->getPointeeType().getUnqualifiedType() );
+            }
+
+            auto* l_rt = l_qt->getAs< clang::ReferenceType >();
+
+            if ( l_rt ) {
+                return ( ( l_rt->getPointeeType().getUnqualifiedType() ) );
+            }
+        }
+
+        return ( l_qt.getUnqualifiedType() );
+    };
+
     const auto* l_call =
         _result.Nodes.getNodeAs< clang::CallExpr >( "sFuncCall" );
 
@@ -37,12 +91,9 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
 
         std::string l_callbackName = l_macroStr->getString().str();
 
-        {
-            std::string l_message = "Found macro name: ";
-            l_message.append( l_callbackName );
+        logVariable( l_callbackName );
 
-            log( l_message );
-        }
+        log( std::string( "Found macro name: " ) + l_callbackName );
 
         // 1nd arguemnt
         const auto* l_addrDeclRef =
@@ -57,97 +108,82 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
         }
 
         const bool l_pointerPassed = ( l_ptrDeclRef != nullptr );
-        const clang::DeclRefExpr* l_baseDeclRef =
-            l_ptrDeclRef ? l_ptrDeclRef : l_addrDeclRef;
 
-        if ( !l_baseDeclRef )
+        logVariable( l_pointerPassed );
+
+        const clang::DeclRefExpr* l_baseDeclRef =
+            ( ( l_ptrDeclRef ) ? ( l_ptrDeclRef ) : ( l_addrDeclRef ) );
+
+        logVariable( l_baseDeclRef );
+
+        if ( !l_baseDeclRef ) {
             goto EXIT;
+        }
 
         const auto* l_varDecl =
             llvm::dyn_cast< clang::VarDecl >( l_baseDeclRef->getDecl() );
 
-        if ( !l_varDecl )
+        if ( !l_varDecl ) {
+            logError( "Base decl is not a VarDecl." );
+
             goto EXIT;
-
-        clang::QualType l_varType = l_varDecl->getType();
-        clang::QualType l_recordQt;
-
-        if ( l_pointerPassed ) {
-            // pointer was passed; try to get pointee
-            if ( l_varType->isPointerType() ) {
-                l_recordQt = l_varType->getPointeeType();
-            } else if ( const auto* l_rt =
-                            l_varType->getAs< clang::ReferenceType >() ) {
-                // defensive for C++ reference types
-                l_recordQt = l_rt->getPointeeType();
-            } else {
-                // fallback: maybe typedef to pointer or unexpected; use as-is
-                l_recordQt = l_varType;
-            }
-        } else {
-            // &var was passed; var should be a record type
-            l_recordQt = l_varType;
         }
 
-        // Normalize type: strip qualifiers/typedefs
-        l_recordQt = l_recordQt.getUnqualifiedType();
+        logVariable( l_varDecl );
+
+        clang::QualType l_recordQt =
+            l_getRecordTypeFromVar( l_varDecl, l_pointerPassed );
+
+        logVariable( l_recordQt );
 
         if ( l_recordQt.isNull() ) {
+            logError( "Record type is null." );
+
             goto EXIT;
         }
 
         if ( !l_recordQt->isStructureType() && !l_recordQt->isUnionType() ) {
-            // Not a struct/union; nothing to do
+            logError( "First arg is not a struct/union type." );
+
             goto EXIT;
         }
 
         const clang::RecordType* l_rt =
             l_recordQt->getAs< clang::RecordType >();
-        if ( !l_rt )
+
+        if ( !l_rt ) {
+            logError( "RecordType cast failed." );
+
             goto EXIT;
+        }
 
         clang::RecordDecl* l_rd = l_rt->getOriginalDecl();
-        if ( !l_rd )
-            goto EXIT;
 
-        // Need the definition to iterate fields
-        l_rd = l_rd->getDefinition();
         if ( !l_rd ) {
-            std::string l_message = "Record has no definition (forward-decl): ";
-            l_message.append( l_varDecl->getNameAsString() );
-
-            logError( l_message );
+            logError( "Original RecordDecl missing." );
 
             goto EXIT;
         }
 
-        clang::SourceManager& l_sm = *( _result.SourceManager );
-        clang::LangOptions l_lo = _result.Context->getLangOpts();
+        l_rd = l_rd->getDefinition();
 
-        // Get base expression text (use declref token-range so we get exact var
-        // text)
-        clang::CharSourceRange l_baseRange =
-            clang::CharSourceRange::getTokenRange(
-                l_baseDeclRef->getSourceRange() );
+        if ( !l_rd ) {
+            logError(
+                std::string( "Record has no definition (forward-decl): " ) +
+                l_varDecl->getNameAsString() );
 
-        std::string l_baseExprText;
-        bool l_gotBaseText = false;
-        if ( l_baseRange.isValid() ) {
-            llvm::Expected< llvm::StringRef > l_maybeText =
-                clang::Lexer::getSourceText( l_baseRange, l_sm, l_lo );
-
-            if ( l_maybeText ) {
-                l_baseExprText = l_maybeText->str();
-                l_gotBaseText = true;
-            }
-        }
-        if ( !l_gotBaseText ) {
-            // fallback to var name if source text extraction failed
-            l_baseExprText = l_varDecl->getNameAsString();
+            goto EXIT;
         }
 
-        // Determine indentation from call location (use spelling loc for
-        // column)
+        logVariable( l_rd );
+
+        std::string l_baseExprText = l_getSourceTextOrFallback(
+            l_baseDeclRef, l_varDecl->getNameAsString() );
+
+        logVariable( l_baseExprText );
+
+        //  Determine indentation from call location (use spelling loc for
+        //  column)
         clang::SourceLocation l_startLoc =
             l_sm.getSpellingLoc( l_call->getBeginLoc() );
         unsigned l_col = l_sm.getSpellingColumnNumber( l_startLoc );
@@ -161,79 +197,65 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
         // ..." or typedef name).
         std::string l_recordTypeStr;
 
-        if ( const auto* l_tst =
-                 llvm::dyn_cast< clang::TypedefType >( l_recordQt ) ) {
-            l_recordTypeStr = l_tst->getDecl()->getNameAsString();
+        // llvm::dyn_cast< clang::TypedefType >( l_recordQt ) ) {
+
+        if ( const auto* l_tdt = l_recordQt->getAs< clang::TypedefType >() ) {
+            l_recordTypeStr = l_tdt->getDecl()->getNameAsString();
+
+#if 0
+        } else if ( const auto* TAT = llvm::dyn_cast< clang::TypeAliasType >(
+                        l_recordQt.getTypePtrOrNull() ) ) {
+            // using alias
+            l_recordTypeStr = TAT->getDecl()->getNameAsString();
+#endif
 
         } else {
             l_recordTypeStr = l_recordQt.getAsString();
         }
 
-        for ( const clang::FieldDecl* l_field : l_rd->fields() ) {
-            if ( l_field->isUnnamedBitField() ) {
-                continue;
+        logVariable( l_recordTypeStr );
+
+        llvm::raw_string_ostream l_ss( l_replacementText );
+
+        auto l_appendFieldLine = [ & ]( const clang::FieldDecl* _fd ) {
+            if ( !_fd ) {
+                return;
             }
 
-            if ( !l_field->getIdentifier() ) {
-                continue;
+            if ( _fd->isUnnamedBitField() ) {
+                return;
             }
 
-            std::string l_fieldName = l_field->getNameAsString();
-
-            if ( l_fieldName.empty() ) {
-                continue;
+            if ( !_fd->getIdentifier() ) {
+                return;
             }
 
-            // Build the &(base->field) or &(base.field) expression safely
-            std::string l_memberAccess;
-
-            if ( l_pointerPassed ) {
-                // wrap base in parentheses to be safe if base is a complex
-                // expression
-                l_memberAccess = "(";
-                l_memberAccess += l_baseExprText;
-                l_memberAccess += ")->";
-                l_memberAccess += l_fieldName;
-
-            } else {
-                l_memberAccess = l_baseExprText;
-                l_memberAccess += ".";
-                l_memberAccess += l_fieldName;
+            std::string l_fname = _fd->getNameAsString();
+            if ( l_fname.empty() ) {
+                return;
             }
 
+            std::string l_ftype = _fd->getType().getAsString();
+            std::string l_memberAccess =
+                l_pointerPassed ? ( "(" + l_baseExprText + ")->" + l_fname )
+                                : ( l_baseExprText + "." + l_fname );
             std::string l_fieldRef = "&(" + l_memberAccess + ")";
 
-            // Field type string (use printing - may include qualifiers)
-            std::string l_fieldTypeStr = l_field->getType().getAsString();
+            l_ss << l_indent << l_callbackName << "(\"" << l_fname << "\", "
+                 << "\"" << l_ftype << "\", " << l_fieldRef << ", "
+                 << "__builtin_offsetof(" << l_recordTypeStr << ", " << l_fname
+                 << "), "
+                 << "sizeof(((" << l_recordTypeStr << "*)0)->" << l_fname
+                 << "));\n";
+        };
 
-            // callbackName( "fieldName", "fieldType", &(variable->field),
-            // __builtin_offsetof( structType, field ), sizeof( ( (structType*)
-            // 0)->field ) );
-            l_replacementText.append( l_indent )
-                .append( l_callbackName )
-                .append( "(" )
-                .append( "\"" )
-                .append( l_fieldName )
-                .append( "\"" ) // "fieldName"
-                .append( ", " )
-                .append( "\"" )
-                .append( l_fieldTypeStr )
-                .append( "\"" ) // "fieldType"
-                .append( ", " )
-                .append( l_fieldRef ) // &(variable->field)
-                .append( ", " )
-                .append( "__builtin_offsetof(" )
-                .append( l_recordTypeStr )
-                .append( ", " )
-                .append( l_fieldName )
-                .append( "), " ) // __builtin_offsetof(structType, field)
-                .append( "sizeof(((" )
-                .append( l_recordTypeStr )
-                .append( "*)0)->" )
-                .append( l_fieldName )
-                .append( ")" ) // sizeof(((structType*)0)->field)
-                .append( ");\n" );
+        for ( const clang::FieldDecl* l_fd : l_rd->fields() ) {
+            l_appendFieldLine( l_fd );
         }
+
+        l_ss.flush();
+
+        logVariable( l_replacementText );
 
         // Replace the entire call (including semicolon) with replacementText
         clang::SourceLocation l_endLoc = l_call->getEndLoc();
@@ -243,45 +265,48 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
         bool l_includeSemi = false;
 
         if ( l_afterCall.isValid() ) {
-            // Check the immediate character after the call end; use spelling
-            // location
-            const char* l_c = nullptr;
-
             clang::SourceLocation l_afterSpelling =
                 l_sm.getSpellingLoc( l_afterCall );
 
             if ( l_afterSpelling.isValid() ) {
-                l_c = l_sm.getCharacterData( l_afterSpelling, nullptr );
-            }
+                bool l_invalid = false;
 
-            if ( l_c && *l_c == ';' ) {
-                l_includeSemi = true;
+                const char* l_c =
+                    l_sm.getCharacterData( l_afterSpelling, &l_invalid );
+
+                if ( !l_invalid && l_c && *l_c == ';' )
+                    l_includeSemi = true;
             }
         }
 
         clang::SourceLocation l_replaceEnd =
-            ( ( l_includeSemi ) ? ( l_afterCall.getLocWithOffset( 1 ) )
-                                : ( l_endLoc ) );
-
+            ( l_includeSemi ? l_afterCall.getLocWithOffset( 1 ) : l_endLoc );
         clang::CharSourceRange l_toReplace =
             clang::CharSourceRange::getCharRange( l_call->getBeginLoc(),
                                                   l_replaceEnd );
 
-        if ( l_replaceEnd.isValid() &&
-             _rewriter.getSourceMgr().isWrittenInMainFile(
+        // Only attempt to query rewritten text / replace if the range is valid
+        // and in main file
+        if ( !l_toReplace.isValid() ||
+             !_rewriter.getSourceMgr().isWrittenInMainFile(
                  l_toReplace.getBegin() ) ) {
-            std::string l_rewritten =
-                _rewriter.getRewrittenText( l_replaceEnd );
-            if ( l_rewritten.empty() ) {
-                llvm::errs() << "Rewritten text is empty.\n";
-            } else {
-                llvm::errs() << "Rewritten text: " << l_rewritten << "\n";
-            }
+            logError( "Invalid or non-main file range for rewrite." );
+
+            goto EXIT;
+        }
+
+        // optional: debug existing rewritten text safely
+        std::string l_existing = _rewriter.getRewrittenText( l_toReplace );
+        if ( l_existing.empty() ) {
+            llvm::errs()
+                << "Existing rewritten text is empty or not yet rewritten.\n";
+
         } else {
-            llvm::errs() << "Invalid or non-main file range.\n";
+            llvm::errs() << "Existing rewritten text: " << l_existing << "\n";
         }
 
         _rewriter.ReplaceText( l_toReplace, l_replacementText );
+        log( "performed_replace" );
     }
 
 EXIT:
