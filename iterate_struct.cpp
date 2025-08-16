@@ -42,6 +42,7 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
         if ( !l_txt.empty() ) {
             // TODO: Test
             traceExit();
+
             return ( l_txt.str() );
         }
 
@@ -190,7 +191,7 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
         std::string l_indent( ( l_col > 0 ) ? ( l_col - 1 ) : 0, ' ' );
 
         // Prepare replacement
-        std::string l_replacementText = "\n";
+        std::string l_replacementText;
 
         // Get a reasonable textual representation of the record type for
         // offsetof/sizeof. Prefer the printed QualType (may include "struct
@@ -201,13 +202,6 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
 
         if ( const auto* l_tdt = l_recordQt->getAs< clang::TypedefType >() ) {
             l_recordTypeStr = l_tdt->getDecl()->getNameAsString();
-
-#if 0
-        } else if ( const auto* TAT = llvm::dyn_cast< clang::TypeAliasType >(
-                        l_recordQt.getTypePtrOrNull() ) ) {
-            // using alias
-            l_recordTypeStr = TAT->getDecl()->getNameAsString();
-#endif
 
         } else {
             l_recordTypeStr = l_recordQt.getAsString();
@@ -231,22 +225,24 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
             }
 
             std::string l_fname = _fd->getNameAsString();
+
             if ( l_fname.empty() ) {
                 return;
             }
 
             std::string l_ftype = _fd->getType().getAsString();
             std::string l_memberAccess =
-                l_pointerPassed ? ( "(" + l_baseExprText + ")->" + l_fname )
-                                : ( l_baseExprText + "." + l_fname );
-            std::string l_fieldRef = "&(" + l_memberAccess + ")";
+                ( ( l_pointerPassed )
+                      ? ( "(" + l_baseExprText + ")->" + l_fname )
+                      : ( l_baseExprText + "." + l_fname ) );
+            std::string l_fieldRef = ( "&(" + l_memberAccess + ")" );
 
             l_ss << l_indent << l_callbackName << "(\"" << l_fname << "\", "
                  << "\"" << l_ftype << "\", " << l_fieldRef << ", "
                  << "__builtin_offsetof(" << l_recordTypeStr << ", " << l_fname
                  << "), "
                  << "sizeof(((" << l_recordTypeStr << "*)0)->" << l_fname
-                 << "));\n";
+                 << "));";
         };
 
         for ( const clang::FieldDecl* l_fd : l_rd->fields() ) {
@@ -274,22 +270,24 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
                 const char* l_c =
                     l_sm.getCharacterData( l_afterSpelling, &l_invalid );
 
-                if ( !l_invalid && l_c && *l_c == ';' )
+                if ( ( !l_invalid ) && ( l_c ) && ( *l_c == ';' ) ) {
                     l_includeSemi = true;
+                }
             }
         }
 
         clang::SourceLocation l_replaceEnd =
-            ( l_includeSemi ? l_afterCall.getLocWithOffset( 1 ) : l_endLoc );
+            ( ( l_includeSemi ) ? ( l_afterCall.getLocWithOffset( 1 ) )
+                                : ( l_endLoc ) );
         clang::CharSourceRange l_toReplace =
             clang::CharSourceRange::getCharRange( l_call->getBeginLoc(),
                                                   l_replaceEnd );
 
         // Only attempt to query rewritten text / replace if the range is valid
         // and in main file
-        if ( !l_toReplace.isValid() ||
-             !_rewriter.getSourceMgr().isWrittenInMainFile(
-                 l_toReplace.getBegin() ) ) {
+        if ( ( !l_toReplace.isValid() ) ||
+             ( !_rewriter.getSourceMgr().isWrittenInMainFile(
+                 l_toReplace.getBegin() ) ) ) {
             logError( "Invalid or non-main file range for rewrite." );
 
             goto EXIT;
@@ -297,15 +295,17 @@ void IterateStructHandler::run( const MatchFinder::MatchResult& _result ) {
 
         // optional: debug existing rewritten text safely
         std::string l_existing = _rewriter.getRewrittenText( l_toReplace );
+
         if ( l_existing.empty() ) {
-            llvm::errs()
-                << "Existing rewritten text is empty or not yet rewritten.\n";
+            logError(
+                "Existing rewritten text is empty or not yet rewritten." );
 
         } else {
-            llvm::errs() << "Existing rewritten text: " << l_existing << "\n";
+            logError( "Existing rewritten text: " + l_existing );
         }
 
         _rewriter.ReplaceText( l_toReplace, l_replacementText );
+
         log( "performed_replace" );
     }
 
@@ -319,27 +319,59 @@ void IterateStructHandler::addMatcher( MatchFinder& _matcher,
 
     auto l_handler = std::make_unique< IterateStructHandler >( _rewriter );
 
+    // Canonical record type matcher (handles typedefs/quals)
     auto l_isRecordType = qualType( hasCanonicalType( recordType() ) );
 
-    // Match calls to sFunc(&struct, "callback")
-    _matcher.addMatcher(
-        callExpr(
-            callee( functionDecl( hasName( "sFunc" ) ) ),
-            hasArgument(
-                0,
-                anyOf(
-                    // Record (struct)
-                    unaryOperator( hasOperatorName( "&" ),
-                                   hasUnaryOperand( ignoringParenImpCasts(
-                                       declRefExpr( to( varDecl( hasType(
-                                                        l_isRecordType ) ) ) )
-                                           .bind( "addrDeclRef" ) ) ) ),
+    // Helper matchers
+    auto l_ptrToRecord = pointsTo( l_isRecordType );
+    auto l_arrayOfRecord = arrayType( hasElementType( l_isRecordType ) );
 
-                    // Pointer to record (struct*)
-                    declRefExpr(
-                        to( varDecl( hasType( pointsTo( l_isRecordType ) ) ) ) )
-                        .bind( "ptrDeclRef" ) ) ),
-            hasArgument( 1, stringLiteral().bind( "macroStr" ) ) )
+    // First-argument possibilities:
+    //  - &struct                 -> bind "addrDeclRef"
+    //  - struct*                 -> bind "ptrDeclRef"
+    //  - Array of struct         -> bind "arrayDeclRef" (decays to pointer)
+    //  - getStructPointer()      -> bind "callExprPtr" (call expression that
+    //  yields struct*)
+    //  - (struct S*)expression   -> bind "castToPtr" and inner nodes if
+    //  available
+    auto l_firstArgument = anyOf(
+        // &struct
+        unaryOperator(
+            hasOperatorName( "&" ),
+            hasUnaryOperand( ignoringParenImpCasts(
+                declRefExpr( to( varDecl( hasType( l_isRecordType ) ) ) )
+                    .bind( "addrDeclRef" ) ) ) ),
+
+        // struct*
+        ignoringParenImpCasts(
+            declRefExpr( to( varDecl( hasType( l_ptrToRecord ) ) ) )
+                .bind( "ptrDeclRef" ) ),
+
+        // Array of struct
+        ignoringParenImpCasts(
+            declRefExpr( to( varDecl( hasType( l_arrayOfRecord ) ) ) )
+                .bind( "arrayDeclRef" ) ),
+
+        // getStructPointer()
+        ignoringParenImpCasts(
+            callExpr( hasType( l_ptrToRecord ) ).bind( "callExprPtr" ) ),
+
+        // (struct S*)expression
+        ignoringParenImpCasts(
+            cStyleCastExpr(
+                hasDestinationType( l_ptrToRecord ),
+                hasSourceExpression( ignoringParenImpCasts( anyOf(
+                    declRefExpr( to( varDecl( hasType( l_isRecordType ) ) ) )
+                        .bind( "castDeclRef" ),
+                    callExpr().bind( "castCallExpr" ),
+                    memberExpr().bind( "castMemberExpr" ) ) ) ) )
+                .bind( "castToPtr" ) ) );
+
+    // Match calls to iterate_struct_union(&struct, "callback")
+    _matcher.addMatcher(
+        callExpr( callee( functionDecl( hasName( "sFunc" ) ) ),
+                  hasArgument( 0, l_firstArgument ),
+                  hasArgument( 1, stringLiteral().bind( "macroStr" ) ) )
             .bind( "sFuncCall" ),
         l_handler.release() );
 
