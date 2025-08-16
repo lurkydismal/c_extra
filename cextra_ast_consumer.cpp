@@ -7,7 +7,7 @@ CExtraASTConsumer::CExtraASTConsumer( clang::Rewriter& _rewriter ) {
     traceEnter();
 
     // TODO: Improve to not hardcode it
-    IterateStructHandler::addMatcher( _matcher, _rewriter );
+    IterateStructUnionHandler::addMatcher( _matcher, _rewriter );
 
     traceExit();
 }

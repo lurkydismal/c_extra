@@ -7,7 +7,7 @@ add_clang_executable(c_extra
     arguments_parse.cpp
     cextra_frontend.cpp
     cextra_ast_consumer.cpp
-    iterate_struct.cpp
+    iterate_struct_union.cpp
 )
 
 target_link_libraries(c_extra
