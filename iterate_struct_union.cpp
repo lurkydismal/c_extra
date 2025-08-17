@@ -77,7 +77,7 @@ void IterateStructUnionHandler::run( const MatchFinder::MatchResult& _result ) {
     };
 
     const auto* l_call =
-        _result.Nodes.getNodeAs< clang::CallExpr >( "sFuncCall" );
+        _result.Nodes.getNodeAs< clang::CallExpr >( "iterateStructUnionCall" );
 
     if ( !l_call ) {
         goto EXIT;
@@ -524,12 +524,17 @@ void IterateStructUnionHandler::addMatcher( MatchFinder& _matcher,
                     memberExpr().bind( "castMemberExpr" ) ) ) ) )
                 .bind( "castToPtr" ) ) );
 
-    // Match calls to iterate_struct_union(&struct, "callback")
+    // Match calls to:
+    // iterate_struct(&struct, "callback")
+    // iterate_union(&struct, "callback")
+    // iterate_struct_union(&struct, "callback")
     _matcher.addMatcher(
-        callExpr( callee( functionDecl( hasAnyName( "sFunc", "ssFunc" ) ) ),
-                  hasArgument( 0, l_firstArgument ),
-                  hasArgument( 1, stringLiteral().bind( "macroStr" ) ) )
-            .bind( "sFuncCall" ),
+        callExpr(
+            callee( functionDecl( hasAnyName( "iterate_struct", "iterate_union",
+                                              "iterate_struct_union" ) ) ),
+            hasArgument( 0, l_firstArgument ),
+            hasArgument( 1, stringLiteral().bind( "macroStr" ) ) )
+            .bind( "iterateStructUnionCall" ),
         l_handler.release() );
 
     traceExit();
