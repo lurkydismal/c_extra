@@ -110,7 +110,7 @@ void IterateStructUnionHandler::run( const MatchFinder::MatchResult& _result ) {
     }
 
     {
-        // 2nd arguemnt
+        // 2nd argument
         const auto* l_callbackNameLiteral =
             _result.Nodes.getNodeAs< clang::StringLiteral >( "callbackName" );
 
@@ -125,7 +125,7 @@ void IterateStructUnionHandler::run( const MatchFinder::MatchResult& _result ) {
 
         logVariable( l_callbackName );
 
-        // 1st arguemnt
+        // 1st argument
         const auto* l_addressDeclarationReference =
             _result.Nodes.getNodeAs< clang::DeclRefExpr >(
                 "addressDeclarationReference" );
@@ -394,7 +394,6 @@ void IterateStructUnionHandler::run( const MatchFinder::MatchResult& _result ) {
 
         logVariable( l_recordTypeString );
 
-        // Prepare replacement
         std::string l_replacementText;
 
         // Build replacement text
@@ -429,12 +428,16 @@ void IterateStructUnionHandler::run( const MatchFinder::MatchResult& _result ) {
                         std::string l_fieldName =
                             _fieldDeclaration->getNameAsString();
 
+                        logVariable( l_fieldName );
+
                         if ( l_fieldName.empty() ) {
                             goto EXIT;
                         }
 
                         std::string l_fieldType =
                             _fieldDeclaration->getType().getAsString();
+
+                        logVariable( l_fieldType );
 
                         std::string l_memberAccess;
 
@@ -454,6 +457,8 @@ void IterateStructUnionHandler::run( const MatchFinder::MatchResult& _result ) {
                         const std::string l_fieldReference =
                             ( "&(" + l_memberAccess + ")" );
 
+                        logVariable( l_fieldReference );
+
                         // callbackName(
                         //   "fieldName",
                         //   "fieldType",
@@ -467,7 +472,7 @@ void IterateStructUnionHandler::run( const MatchFinder::MatchResult& _result ) {
                             << "__builtin_offsetof(" << l_recordTypeString
                             << ", " << l_fieldName << "), "
                             << "sizeof(((" << l_recordTypeString << "*)0)->"
-                            << l_fieldName << "));" << "\n";
+                            << l_fieldName << ")" << ");\n";
                     }
 
                 EXIT:

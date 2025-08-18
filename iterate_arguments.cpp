@@ -19,93 +19,198 @@ IterateArgumentsHandler::IterateArgumentsHandler( clang::Rewriter& _rewriter )
 void IterateArgumentsHandler::run( const MatchFinder::MatchResult& _result ) {
     traceEnter();
 
-    clang::SourceManager& l_sm = *_result.SourceManager;
-    clang::LangOptions l_lo = _result.Context->getLangOpts();
+    clang::SourceManager& l_sourceManager = *_result.SourceManager;
+    clang::LangOptions l_langOptions = _result.Context->getLangOpts();
 
-    const auto* l_call =
-        _result.Nodes.getNodeAs< clang::CallExpr >( "argCall" );
-    if ( !l_call )
+    const auto* l_callingExpression =
+        _result.Nodes.getNodeAs< clang::CallExpr >( "iterateArgumentsCall" );
+
+    logVariable( l_callingExpression );
+
+    if ( !l_callingExpression ) {
         goto EXIT;
+    }
 
     {
+        // 2nd argument
         const auto* l_callbackNameLiteral =
             _result.Nodes.getNodeAs< clang::StringLiteral >( "callbackName" );
-        if ( !l_callbackNameLiteral )
+
+        logVariable( l_callbackNameLiteral );
+
+        if ( !l_callbackNameLiteral ) {
             goto EXIT;
-        std::string l_callbackName = l_callbackNameLiteral->getString().str();
+        }
+
+        const clang::StringRef l_callbackName =
+            l_callbackNameLiteral->getString();
+
         logVariable( l_callbackName );
 
-        const auto* l_funcDecl =
-            _result.Nodes.getNodeAs< clang::FunctionDecl >( "funcDecl" );
-        if ( !l_funcDecl )
+        // 1st argument
+        const auto* l_ancestorFunctionDeclaration =
+            _result.Nodes.getNodeAs< clang::FunctionDecl >(
+                "ancestorFunctionDeclaration" );
+
+        logVariable( l_ancestorFunctionDeclaration );
+
+        if ( !l_ancestorFunctionDeclaration ) {
             goto EXIT;
-        logVariable( l_funcDecl );
-
-        // Determine indent
-        clang::SourceLocation l_startLoc =
-            l_sm.getSpellingLoc( l_call->getBeginLoc() );
-        unsigned l_col = l_sm.getSpellingColumnNumber( l_startLoc );
-        std::string l_indent( ( l_col > 0 ) ? ( l_col - 1 ) : 0, ' ' );
-
-        // Build replacement text: one callback per parameter
-        std::string l_replacementText;
-        llvm::raw_string_ostream l_ss( l_replacementText );
-        for ( const clang::ParmVarDecl* l_param : l_funcDecl->parameters() ) {
-            std::string l_name = l_param->getNameAsString();
-            if ( l_name.empty() ) {
-                logError( "Parameter has no name; skipping" );
-                continue;
-            }
-            clang::QualType l_pt = l_param->getType();
-            std::string l_typeStr;
-            if ( auto* l_tdt = l_pt->getAs< clang::TypedefType >() ) {
-                l_typeStr = l_tdt->getDecl()->getNameAsString();
-            } else {
-                l_typeStr = l_pt.getAsString();
-            }
-            l_ss << l_indent << l_callbackName << "(\"" << l_name << "\", "
-                 << "\"" << l_typeStr << "\", "
-                 << "&(" << l_name << "));\n";
         }
-        l_ss.flush();
-        // Remove indent on first line and trailing newline
-        l_replacementText.erase( 0, l_indent.length() );
-        if ( !l_replacementText.empty() && l_replacementText.back() == '\n' )
-            l_replacementText.pop_back();
+
+        std::string l_replacementText;
+
+        // Build replacement text
+        {
+            // Determine indentation from call location
+            // Use spelling loc for column
+            const clang::SourceLocation l_sourceStartLocation =
+                l_sourceManager.getSpellingLoc(
+                    l_callingExpression->getBeginLoc() );
+            unsigned l_spellingColumnNumber =
+                l_sourceManager.getSpellingColumnNumber(
+                    l_sourceStartLocation );
+            l_spellingColumnNumber = ( ( l_spellingColumnNumber > 0 )
+                                           ? ( l_spellingColumnNumber - 1 )
+                                           : ( 0 ) );
+            const std::string l_indent( l_spellingColumnNumber, ' ' );
+
+            llvm::raw_string_ostream l_replacementTextStringStream(
+                l_replacementText );
+
+            for ( const clang::ParmVarDecl* l_parameter :
+                  l_ancestorFunctionDeclaration->parameters() ) {
+                const std::string l_parameterName =
+                    l_parameter->getNameAsString();
+
+                logVariable( l_parameterName );
+
+                if ( l_parameterName.empty() ) {
+                    logError( "Parameter has no name; skipping" );
+
+                    continue;
+                }
+
+                std::string l_parameterTypeString;
+
+                // Build
+                {
+                    clang::QualType l_parameterType = l_parameter->getType();
+
+                    const auto* l_typedefType =
+                        l_parameterType->getAs< clang::TypedefType >();
+
+                    if ( l_typedefType ) {
+                        l_parameterTypeString =
+                            l_typedefType->getDecl()->getNameAsString();
+
+                    } else {
+                        l_parameterTypeString = l_parameterType.getAsString();
+                    }
+                }
+
+                logVariable( l_parameterName );
+
+                const std::string l_parameterReference =
+                    ( "&(" + l_parameterName + ")" );
+
+                // callbackName(
+                //   "parameterName",
+                //   "parameterType",
+                //   sizeof( parameterName );
+                l_replacementTextStringStream
+                    << l_indent << l_callbackName << "(" << "\""
+                    << l_parameterName << "\", "
+                    << "\"" << l_parameterTypeString << "\", "
+                    << l_parameterReference << ", " << "sizeof("
+                    << l_parameterName << ")" << ");\n";
+            }
+
+            l_replacementTextStringStream.flush();
+
+            l_replacementText.erase( 0, l_indent.length() );
+
+            if ( ( !l_replacementText.empty() ) &&
+                 ( l_replacementText.back() == '\n' ) ) {
+                l_replacementText.pop_back();
+            }
+        }
+
         logVariable( l_replacementText );
 
-        // Replace the call including semicolon if present (same logic as above)
-        clang::SourceLocation l_endLoc = l_call->getEndLoc();
-        clang::SourceLocation l_afterCall =
-            clang::Lexer::getLocForEndOfToken( l_endLoc, 0, l_sm, l_lo );
-        bool l_includeSemi = false;
-        if ( l_afterCall.isValid() ) {
-            clang::SourceLocation l_afterSpelling =
-                l_sm.getSpellingLoc( l_afterCall );
-            bool l_invalid = false;
-            const char* l_c =
-                l_sm.getCharacterData( l_afterSpelling, &l_invalid );
-            if ( !l_invalid && l_c && *l_c == ';' ) {
-                l_includeSemi = true;
+        // Replace the entire call (including semicolon) with replacement text
+        {
+            clang::CharSourceRange l_sourceRangeToReplace;
+
+            {
+                const clang::SourceLocation l_sourceEndLocation =
+                    l_callingExpression->getEndLoc();
+                // TODO:Rename
+                const clang::SourceLocation l_lastCharacterSourceLocation =
+                    clang::Lexer::getLocForEndOfToken( l_sourceEndLocation, 0,
+                                                       l_sourceManager,
+                                                       l_langOptions );
+
+                bool l_isSemicolonIncluded = false;
+
+                if ( l_lastCharacterSourceLocation.isValid() ) {
+                    // TODO: Rename
+                    const clang::SourceLocation l_afterSpelling =
+                        l_sourceManager.getSpellingLoc(
+                            l_lastCharacterSourceLocation );
+
+                    if ( l_afterSpelling.isValid() ) {
+                        bool l_isInvalid = false;
+
+                        const char* l_lastCharacter =
+                            l_sourceManager.getCharacterData( l_afterSpelling,
+                                                              &l_isInvalid );
+
+                        if ( ( !l_isInvalid ) && ( l_lastCharacter ) &&
+                             ( *l_lastCharacter == ';' ) ) {
+                            l_isSemicolonIncluded = true;
+                        }
+                    }
+                }
+
+                const clang::SourceLocation l_replacementSourceEndLocation =
+                    ( ( l_isSemicolonIncluded )
+                          ? ( l_lastCharacterSourceLocation.getLocWithOffset(
+                                1 ) )
+                          : ( l_sourceEndLocation ) );
+
+                l_sourceRangeToReplace = clang::CharSourceRange::getCharRange(
+                    l_callingExpression->getBeginLoc(),
+                    l_replacementSourceEndLocation );
+            }
+
+            // FIX: Log this
+            // logVariable( l_sourceRangeToReplace );
+
+            // Only attempt to query rewritten text/ replace if the range is
+            // valid and in main file
+            if ( ( !l_sourceRangeToReplace.isValid() ) ||
+                 ( !_rewriter.getSourceMgr().isWrittenInMainFile(
+                     l_sourceRangeToReplace.getBegin() ) ) ) {
+                logError( "Invalid or non-main file range for rewrite." );
+
+                goto EXIT;
+            }
+
+            _rewriter.ReplaceText( l_sourceRangeToReplace, l_replacementText );
+
+            // Debug existing rewritten text safely
+            const std::string l_existing =
+                _rewriter.getRewrittenText( l_sourceRangeToReplace );
+
+            if ( l_existing.empty() ) {
+                logError(
+                    "Existing rewritten text is empty or not yet rewritten." );
+
+            } else {
+                log( "Existing rewritten text: " + l_existing );
             }
         }
-        clang::SourceLocation l_replaceEnd =
-            ( l_includeSemi ? l_afterCall.getLocWithOffset( 1 ) : l_endLoc );
-        clang::CharSourceRange l_toReplace =
-            clang::CharSourceRange::getCharRange( l_call->getBeginLoc(),
-                                                  l_replaceEnd );
-        if ( !l_toReplace.isValid() ||
-             !_rewriter.getSourceMgr().isWrittenInMainFile(
-                 l_toReplace.getBegin() ) ) {
-            logError( "Invalid range for rewrite" );
-            goto EXIT;
-        }
-        std::string l_existing = _rewriter.getRewrittenText( l_toReplace );
-        if ( !l_existing.empty() ) {
-            logError( "Existing rewritten text: " + l_existing );
-        }
-        _rewriter.ReplaceText( l_toReplace, l_replacementText );
-        log( "performed_replace" );
     }
 
 EXIT:
@@ -120,10 +225,11 @@ void IterateArgumentsHandler::addMatcher( MatchFinder& _matcher,
 
     // Match calls to iterate_arguments(&struct, "callback")
     _matcher.addMatcher(
-        callExpr( callee( functionDecl( hasName( "iterate_arguments" ) ) ),
-                  hasAncestor( functionDecl().bind( "funcDecl" ) ),
-                  hasArgument( 0, stringLiteral().bind( "callbackName" ) ) )
-            .bind( "argCall" ),
+        callExpr(
+            callee( functionDecl( hasName( "iterate_arguments" ) ) ),
+            hasAncestor( functionDecl().bind( "ancestorFunctionDeclaration" ) ),
+            hasArgument( 0, stringLiteral().bind( "callbackName" ) ) )
+            .bind( "iterateArgumentsCall" ),
         l_handler.release() );
     traceExit();
 }
