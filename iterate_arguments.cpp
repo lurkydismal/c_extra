@@ -28,13 +28,12 @@ void IterateArgumentsHandler::run( const MatchFinder::MatchResult& _result ) {
         goto EXIT;
 
     {
-        const auto* l_macroStr =
-            _result.Nodes.getNodeAs< clang::StringLiteral >( "macroStr" );
-        if ( !l_macroStr )
+        const auto* l_callbackNameLiteral =
+            _result.Nodes.getNodeAs< clang::StringLiteral >( "callbackName" );
+        if ( !l_callbackNameLiteral )
             goto EXIT;
-        std::string l_callbackName = l_macroStr->getString().str();
+        std::string l_callbackName = l_callbackNameLiteral->getString().str();
         logVariable( l_callbackName );
-        log( "Found callback name: " + l_callbackName );
 
         const auto* l_funcDecl =
             _result.Nodes.getNodeAs< clang::FunctionDecl >( "funcDecl" );
@@ -123,7 +122,7 @@ void IterateArgumentsHandler::addMatcher( MatchFinder& _matcher,
     _matcher.addMatcher(
         callExpr( callee( functionDecl( hasName( "iterate_arguments" ) ) ),
                   hasAncestor( functionDecl().bind( "funcDecl" ) ),
-                  hasArgument( 0, stringLiteral().bind( "macroStr" ) ) )
+                  hasArgument( 0, stringLiteral().bind( "callbackName" ) ) )
             .bind( "argCall" ),
         l_handler.release() );
     traceExit();

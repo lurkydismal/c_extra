@@ -82,14 +82,17 @@ void IterateEnumHandler::run( const MatchFinder::MatchResult& _result ) {
         goto EXIT;
 
     {
-        const auto* l_macroStr =
-            _result.Nodes.getNodeAs< clang::StringLiteral >( "macroStr" );
-        if ( !l_macroStr )
+        const auto* l_callbackNameLiteral =
+            _result.Nodes.getNodeAs< clang::StringLiteral >( "callbackName" );
+
+        if ( !l_callbackNameLiteral ) {
             goto EXIT;
+        }
+
         {
-            std::string l_callbackName = l_macroStr->getString().str();
+            std::string l_callbackName =
+                l_callbackNameLiteral->getString().str();
             logVariable( l_callbackName );
-            log( "Found callback name: " + l_callbackName );
 
             // Bindings from matcher:
             const auto* l_addrDeclRef =
@@ -395,7 +398,7 @@ void IterateEnumHandler::addMatcher( MatchFinder& _matcher,
     _matcher.addMatcher(
         callExpr( callee( functionDecl( hasName( "iterate_enum" ) ) ),
                   hasArgument( 0, l_firstArgument ),
-                  hasArgument( 1, stringLiteral().bind( "macroStr" ) ) )
+                  hasArgument( 1, stringLiteral().bind( "callbackName" ) ) )
             .bind( "enumCall" ),
         l_handler.release() );
 

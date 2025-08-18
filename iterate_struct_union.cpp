@@ -4,6 +4,7 @@
 
 #include <memory>
 
+#include "clang/AST/Expr.h"
 #include "log.hpp"
 #include "trace.hpp"
 
@@ -20,450 +21,549 @@ IterateStructUnionHandler::IterateStructUnionHandler(
 void IterateStructUnionHandler::run( const MatchFinder::MatchResult& _result ) {
     traceEnter();
 
-    clang::SourceManager& l_sm = *( _result.SourceManager );
-    clang::LangOptions l_lo = _result.Context->getLangOpts();
+    clang::SourceManager& l_sourceManager = *( _result.SourceManager );
+    clang::LangOptions l_langOptions = _result.Context->getLangOpts();
 
-    // Helper: get token-range source text for an Expr, fallback on 'fallback'
+    // Helper: get token-range source text for an Expr, fallback on '_fallback'
     auto l_getSourceTextOrFallback =
-        [ & ]( const clang::Expr* _e,
-               const std::string& _fallback ) -> std::string {
-        if ( !_e ) {
-            return ( _fallback );
+        [ & ]( const clang::Expr* _expression,
+               const clang::StringRef _fallbackResult ) -> clang::StringRef {
+        traceEnter();
+
+        clang::StringRef l_returnValue = _fallbackResult;
+
+        if ( !_expression ) {
+            goto EXIT;
         }
 
-        clang::CharSourceRange l_r =
-            clang::CharSourceRange::getTokenRange( _e->getSourceRange() );
+        {
+            clang::CharSourceRange l_sourceRange =
+                clang::CharSourceRange::getTokenRange(
+                    _expression->getSourceRange() );
 
-        if ( !l_r.isValid() ) {
-            return ( _fallback );
+            if ( !l_sourceRange.isValid() ) {
+                goto EXIT;
+            }
+
+            clang::Expected< clang::StringRef > l_sourceText =
+                clang::Lexer::getSourceText( l_sourceRange, l_sourceManager,
+                                             l_langOptions );
+
+            if ( l_sourceText ) {
+                l_returnValue = l_sourceText.get();
+            }
         }
 
-        clang::Expected< clang::StringRef > l_txt =
-            clang::Lexer::getSourceText( l_r, l_sm, l_lo );
+    EXIT:
+        traceExit();
 
-        if ( l_txt ) {
-            // TODO: Test
-            traceExit();
-
-            return ( l_txt->str() );
-        }
-
-        return ( _fallback );
+        return ( l_returnValue );
     };
 
     // Helper: extract the underlying record QualType from a VarDecl.
-    // If pointerPassed==true, try to return pointee type.
-    auto l_getRecordTypeFromVar = [ & ](
-                                      const clang::VarDecl* _vd,
-                                      bool _pointerPassed ) -> clang::QualType {
-        if ( !_vd )
-            return {};
+    // NOTE: If pointerPassed==true, try to return pointee type.
+    auto l_getRecordTypeFromVariable =
+        [ & ]( const clang::VarDecl* _variableDeclaration,
+               const bool _pointerPassed ) -> clang::QualType {
+        traceEnter();
 
-        clang::QualType l_qt = _vd->getType();
+        clang::QualType l_returnValue = {};
 
-        if ( _pointerPassed ) {
-            if ( l_qt->isPointerType() ) {
-                return ( l_qt->getPointeeType().getUnqualifiedType() );
-            }
+        if ( !_variableDeclaration ) {
+            goto EXIT;
+        }
 
-            auto* l_rt = l_qt->getAs< clang::ReferenceType >();
+        {
+            clang::QualType l_qualifierType = _variableDeclaration->getType();
 
-            if ( l_rt ) {
-                return ( ( l_rt->getPointeeType().getUnqualifiedType() ) );
+            l_returnValue = l_qualifierType.getUnqualifiedType();
+
+            if ( _pointerPassed ) {
+                if ( l_qualifierType->isPointerType() ) {
+                    l_returnValue =
+                        l_qualifierType->getPointeeType().getUnqualifiedType();
+                }
+
+                auto* l_referenceType =
+                    l_qualifierType->getAs< clang::ReferenceType >();
+
+                if ( l_referenceType ) {
+                    l_returnValue =
+                        l_referenceType->getPointeeType().getUnqualifiedType();
+                }
             }
         }
 
-        return ( l_qt.getUnqualifiedType() );
+    EXIT:
+        traceExit();
+
+        return ( l_returnValue );
     };
 
-    const auto* l_call =
+    const auto* l_callingExpression =
         _result.Nodes.getNodeAs< clang::CallExpr >( "iterateStructUnionCall" );
 
-    if ( !l_call ) {
+    logVariable( l_callingExpression );
+
+    if ( !l_callingExpression ) {
         goto EXIT;
     }
 
     {
         // 2nd arguemnt
-        const auto* l_macroStr =
-            _result.Nodes.getNodeAs< clang::StringLiteral >( "macroStr" );
+        const auto* l_callbackNameLiteral =
+            _result.Nodes.getNodeAs< clang::StringLiteral >( "callbackName" );
 
-        if ( !l_macroStr ) {
+        logVariable( l_callbackNameLiteral );
+
+        if ( !l_callbackNameLiteral ) {
             goto EXIT;
         }
 
-        std::string l_callbackName = l_macroStr->getString().str();
+        const clang::StringRef l_callbackName =
+            l_callbackNameLiteral->getString();
 
         logVariable( l_callbackName );
 
-        log( std::string( "Found macro name: " ) + l_callbackName );
+        // 1st arguemnt
+        const auto* l_addressDeclarationReference =
+            _result.Nodes.getNodeAs< clang::DeclRefExpr >(
+                "addressDeclarationReference" );
+        const auto* l_pointerDeclarationReference =
+            _result.Nodes.getNodeAs< clang::DeclRefExpr >(
+                "pointerDeclarationReference" );
+        const auto* l_arrayDeclarationReference =
+            _result.Nodes.getNodeAs< clang::DeclRefExpr >(
+                "arrayDeclarationReference" );
+        const auto* l_callingExpressionReference =
+            _result.Nodes.getNodeAs< clang::CallExpr >(
+                "callingExpressionReference" );
 
-        // 1nd arguemnt
-        const auto* l_addrDeclRef =
-            _result.Nodes.getNodeAs< clang::DeclRefExpr >( "addrDeclRef" );
-        const auto* l_ptrDeclRef =
-            _result.Nodes.getNodeAs< clang::DeclRefExpr >( "ptrDeclRef" );
-        const auto* l_arrayDeclRef =
-            _result.Nodes.getNodeAs< clang::DeclRefExpr >( "arrayDeclRef" );
-        const auto* l_callExprPtr =
-            _result.Nodes.getNodeAs< clang::CallExpr >( "callExprPtr" );
+        const auto* l_castingReference =
+            _result.Nodes.getNodeAs< clang::CStyleCastExpr >(
+                "castingReference" );
+        const auto* l_castingDeclarationReference =
+            _result.Nodes.getNodeAs< clang::DeclRefExpr >(
+                "castingDeclarationReference" );
+        const auto* l_castingCallingExpression =
+            _result.Nodes.getNodeAs< clang::CallExpr >(
+                "castingCallingExpression" );
+        const auto* l_castingMemberExpression =
+            _result.Nodes.getNodeAs< clang::MemberExpr >(
+                "castingMemberExpression" );
 
-        const auto* l_castToPtr =
-            _result.Nodes.getNodeAs< clang::CStyleCastExpr >( "castToPtr" );
-        const auto* l_castDeclRef =
-            _result.Nodes.getNodeAs< clang::DeclRefExpr >( "castDeclRef" );
-        const auto* l_castCallExpr =
-            _result.Nodes.getNodeAs< clang::CallExpr >( "castCallExpr" );
-        const auto* l_castMemberExpr =
-            _result.Nodes.getNodeAs< clang::MemberExpr >( "castMemberExpr" );
-
-        // Prepare variables to fill
-        std::string l_baseExprText;
-        logVariable( l_baseExprText ); // log after we overwrite below as
-                                       // required (no-op now)
-
+        clang::StringRef l_baseExpressionText;
         bool l_pointerPassed = false;
-        logVariable( l_pointerPassed ); // logged below immediately after actual
-                                        // assignment
+        clang::QualType l_recordQualifierType;
+        const clang::VarDecl* l_variableDeclaration = nullptr;
 
-        clang::QualType l_recordQt;
-        const clang::VarDecl* l_varDecl = nullptr;
+        logVariable( l_variableDeclaration );
 
-        // Order of precedence: explicit address-of var, pointer var, array var,
-        // cast-to-pointer (if casted-from declref), callExpr returning ptr,
-        // cast-to-pointer general.
-        if ( l_addrDeclRef ) {
+        auto l_extractDeclarationContext =
+            [ & ]( const clang::DeclRefExpr* _declarationReference,
+                   const bool _pointerPassed ) {
+                traceEnter();
+
+                l_variableDeclaration = llvm::dyn_cast< clang::VarDecl >(
+                    _declarationReference->getDecl() );
+
+                logVariable( l_variableDeclaration );
+
+                if ( !l_variableDeclaration ) {
+                    logError( "Does not refer to a VarDecl" );
+
+                    goto EXIT;
+                }
+
+                l_baseExpressionText = l_getSourceTextOrFallback(
+                    _declarationReference,
+                    l_variableDeclaration->getNameAsString() );
+
+                logVariable( l_baseExpressionText );
+
+                l_recordQualifierType = l_getRecordTypeFromVariable(
+                    l_variableDeclaration, l_pointerPassed );
+
+                logVariable( l_recordQualifierType );
+
+            EXIT:
+                traceExit();
+            };
+
+        // Order of precedence: &struct, struct*, array of struct,
+        // getStructPointer(), (struct S*)expression (if casted from declref),
+        // (struct S*)expression.
+        if ( l_addressDeclarationReference ) {
             // &var  -> base is var, pointerPassed = false
             l_pointerPassed = false;
 
-            logVariable( l_pointerPassed );
+            l_extractDeclarationContext( l_addressDeclarationReference,
+                                         l_pointerPassed );
 
-            l_varDecl =
-                llvm::dyn_cast< clang::VarDecl >( l_addrDeclRef->getDecl() );
-
-            if ( !l_varDecl ) {
-                logError( "addrDeclRef does not refer to a VarDecl" );
-
-                goto EXIT;
-            }
-
-            logVariable( l_varDecl );
-
-            l_baseExprText = l_getSourceTextOrFallback(
-                l_addrDeclRef, l_varDecl->getNameAsString() );
-
-            logVariable( l_baseExprText );
-
-            l_recordQt =
-                l_getRecordTypeFromVar( l_varDecl, /*pointerPassed=*/false );
-
-            logVariable( l_recordQt );
-
-        } else if ( l_ptrDeclRef ) {
-            // pointer variable passed -> base is var, pointerPassed = true
+        } else if ( l_pointerDeclarationReference ) {
+            // Pointer variable passed -> base is var, pointerPassed = true
             l_pointerPassed = true;
 
-            logVariable( l_pointerPassed );
+            l_extractDeclarationContext( l_pointerDeclarationReference,
+                                         l_pointerPassed );
 
-            l_varDecl =
-                llvm::dyn_cast< clang::VarDecl >( l_ptrDeclRef->getDecl() );
-
-            if ( !l_varDecl ) {
-                logError( "ptrDeclRef does not refer to a VarDecl" );
-
-                goto EXIT;
-            }
-
-            logVariable( l_varDecl );
-
-            l_baseExprText = l_getSourceTextOrFallback(
-                l_ptrDeclRef, l_varDecl->getNameAsString() );
-
-            logVariable( l_baseExprText );
-
-            l_recordQt =
-                l_getRecordTypeFromVar( l_varDecl, /*pointerPassed=*/true );
-
-            logVariable( l_recordQt );
-
-        } else if ( l_arrayDeclRef ) {
-            // array variable passed (decays to pointer)
+        } else if ( l_arrayDeclarationReference ) {
+            // Array variable passed (decays to pointer)
             l_pointerPassed = true;
 
-            logVariable( l_pointerPassed );
-
-            l_varDecl =
-                llvm::dyn_cast< clang::VarDecl >( l_arrayDeclRef->getDecl() );
-
-            if ( !l_varDecl ) {
-                logError( "arrayDeclRef does not refer to a VarDecl" );
-
-                goto EXIT;
-            }
-
-            logVariable( l_varDecl );
-
-            l_baseExprText = l_getSourceTextOrFallback(
-                l_arrayDeclRef, l_varDecl->getNameAsString() );
-
-            logVariable( l_baseExprText );
+            l_extractDeclarationContext( l_arrayDeclarationReference,
+                                         l_pointerPassed );
 
             // Extract element type from array type
-            if ( const clang::Type* l_tp =
-                     l_varDecl->getType().getTypePtrOrNull() ) {
-                if ( const auto* l_at =
-                         llvm::dyn_cast< clang::ArrayType >( l_tp ) ) {
-                    l_recordQt = l_at->getElementType().getUnqualifiedType();
+            const clang::Type* l_variableDeclarationType =
+                l_variableDeclaration->getType().getTypePtrOrNull();
 
-                } else {
-                    // fallback: try unwrapping typedefs (defensive)
-                    l_recordQt = l_getRecordTypeFromVar(
-                        l_varDecl, /*pointerPassed=*/false );
-                }
+            if ( l_variableDeclarationType ) {
+                const auto* l_arrayType = llvm::dyn_cast< clang::ArrayType >(
+                    l_variableDeclarationType );
 
-            } else {
-                l_recordQt = l_getRecordTypeFromVar( l_varDecl,
-                                                     /*pointerPassed=*/false );
-            }
-            logVariable( l_recordQt );
+                if ( l_arrayType ) {
+                    l_recordQualifierType =
+                        l_arrayType->getElementType().getUnqualifiedType();
 
-        } else if ( l_callExprPtr ) {
-            // call expression that returns struct* (e.g. getStructPtr())
-            l_pointerPassed = true;
-            logVariable( l_pointerPassed );
-
-            l_baseExprText = l_getSourceTextOrFallback( l_callExprPtr, "" );
-            logVariable( l_baseExprText );
-
-            clang::QualType l_t = l_callExprPtr->getType();
-            if ( !l_t.isNull() ) {
-                l_recordQt = l_t->getPointeeType().getUnqualifiedType();
-            }
-            logVariable( l_recordQt );
-
-        } else if ( l_castToPtr ) {
-            // explicit cast to struct* (we matched
-            // hasDestinationType(pointer-to-record))
-            l_pointerPassed = true;
-            logVariable( l_pointerPassed );
-
-            // destination type's pointee is the record type
-            clang::QualType l_castDest = l_castToPtr->getType();
-
-            if ( !l_castDest.isNull() ) {
-                l_recordQt = l_castDest->getPointeeType().getUnqualifiedType();
-            }
-
-            logVariable( l_recordQt );
-
-            // Prefer a bound inner decl (if matcher gave us castDeclRef)
-            if ( l_castDeclRef ) {
-                l_varDecl = llvm::dyn_cast< clang::VarDecl >(
-                    l_castDeclRef->getDecl() );
-
-                if ( l_varDecl ) {
-                    logVariable( l_varDecl );
-
-                    l_baseExprText = l_getSourceTextOrFallback(
-                        l_castDeclRef, l_varDecl->getNameAsString() );
-
-                    logVariable( l_baseExprText );
+                    logVariable( l_recordQualifierType );
                 }
             }
 
-            // Else if casted-from call expression
-            if ( l_baseExprText.empty() && l_castCallExpr ) {
-                l_baseExprText =
-                    l_getSourceTextOrFallback( l_castCallExpr, "" );
+        } else if ( l_callingExpressionReference ) {
+            // Call expression that returns struct*
+            l_pointerPassed = true;
 
-                logVariable( l_baseExprText );
+            l_baseExpressionText =
+                l_getSourceTextOrFallback( l_callingExpressionReference, "" );
+
+            logVariable( l_baseExpressionText );
+
+            const clang::QualType l_qualifierType =
+                l_callingExpressionReference->getType();
+
+            if ( l_qualifierType.isNull() ) {
+                logError( "TODO: WRITE" );
+
+                goto EXIT;
             }
 
-            // Else if casted-from member expression
-            if ( l_baseExprText.empty() && l_castMemberExpr ) {
-                l_baseExprText =
-                    l_getSourceTextOrFallback( l_castMemberExpr, "" );
+            l_recordQualifierType =
+                l_qualifierType->getPointeeType().getUnqualifiedType();
 
-                logVariable( l_baseExprText );
+            logVariable( l_recordQualifierType );
+
+        } else if ( l_castingReference ) {
+            // Explicit cast to struct*
+            // We matched hasDestinationType(pointer-to-record))
+            l_pointerPassed = true;
+
+            // Destination type's pointee is the record type
+            clang::QualType l_castingDestinationQualifierType =
+                l_castingReference->getType();
+
+            if ( l_castingDestinationQualifierType.isNull() ) {
+                logError( "TODO: WRITE2" );
+
+                goto EXIT;
+            }
+
+            l_recordQualifierType =
+                l_castingDestinationQualifierType->getPointeeType()
+                    .getUnqualifiedType();
+
+            logVariable( l_recordQualifierType );
+
+            bool l_found = false;
+
+            // Prefer a bound inner decl
+            if ( l_castingDeclarationReference ) {
+                l_variableDeclaration = llvm::dyn_cast< clang::VarDecl >(
+                    l_castingDeclarationReference->getDecl() );
+
+                logVariable( l_variableDeclaration );
+
+                if ( l_variableDeclaration ) {
+                    l_baseExpressionText = l_getSourceTextOrFallback(
+                        l_castingDeclarationReference,
+                        l_variableDeclaration->getNameAsString() );
+
+                    logVariable( l_baseExpressionText );
+
+                    l_found = true;
+                }
+            }
+
+            // Else if casted - from call expression
+            if ( !l_found && l_castingCallingExpression ) {
+                l_baseExpressionText =
+                    l_getSourceTextOrFallback( l_castingCallingExpression, "" );
+
+                l_found = !l_baseExpressionText.empty();
+            }
+
+            // Else if casted - from member expression
+            if ( !l_found && l_castingMemberExpression ) {
+                l_baseExpressionText =
+                    l_getSourceTextOrFallback( l_castingMemberExpression, "" );
+
+                l_found = !l_baseExpressionText.empty();
             }
 
             // As a final fallback, use the whole cast expression text
-            if ( l_baseExprText.empty() ) {
-                l_baseExprText = l_getSourceTextOrFallback( l_castToPtr, "" );
+            if ( !l_found ) {
+                l_baseExpressionText =
+                    l_getSourceTextOrFallback( l_castingReference, "" );
 
-                logVariable( l_baseExprText );
+                l_found = !l_baseExpressionText.empty();
             }
+
+            logVariable( l_baseExpressionText );
+
         } else {
-            // nothing matched (shouldn't happen if matcher and bindings are
-            // correct)
+            // Nothing matched
+            // Should not happen if matcher and bindings are correct
             logError( "No matching first-argument pattern found." );
 
             goto EXIT;
         }
 
-        if ( l_recordQt.isNull() ) {
+        if ( l_recordQualifierType.isNull() ) {
             logError( "Record type is null." );
 
             goto EXIT;
         }
 
-        if ( !l_recordQt->isStructureType() && !l_recordQt->isUnionType() ) {
+        if ( ( !l_recordQualifierType->isStructureType() ) &&
+             ( !l_recordQualifierType->isUnionType() ) ) {
             logError( "First arg is not a struct/union type." );
 
             goto EXIT;
         }
 
-        const clang::RecordType* l_rt =
-            l_recordQt->getAs< clang::RecordType >();
+        const clang::RecordType* l_recordType =
+            l_recordQualifierType->getAs< clang::RecordType >();
 
-        if ( !l_rt ) {
+        if ( !l_recordType ) {
             logError( "RecordType cast failed." );
 
             goto EXIT;
         }
 
-        clang::RecordDecl* l_rd = l_rt->getOriginalDecl();
+        clang::RecordDecl* l_recordOriginalDeclaration =
+            l_recordType->getOriginalDecl();
 
-        if ( !l_rd ) {
+        logVariable( l_recordOriginalDeclaration );
+
+        if ( !l_recordOriginalDeclaration ) {
             logError( "Original RecordDecl missing." );
 
             goto EXIT;
         }
 
-        l_rd = l_rd->getDefinition();
+        l_recordOriginalDeclaration =
+            l_recordOriginalDeclaration->getDefinition();
 
-        if ( !l_rd ) {
+        logVariable( l_recordOriginalDeclaration );
+
+        if ( !l_recordOriginalDeclaration ) {
             logError(
                 std::string( "Record has no definition (forward-decl): " ) +
-                l_varDecl->getNameAsString() );
+                l_variableDeclaration->getNameAsString() );
 
             goto EXIT;
         }
 
-        logVariable( l_rd );
+        // offsetof/ sizeof
+        std::string l_recordTypeString;
 
-        // Determine indentation from call location (use spelling loc for
-        // column)
-        clang::SourceLocation l_startLoc =
-            l_sm.getSpellingLoc( l_call->getBeginLoc() );
-        unsigned l_col = l_sm.getSpellingColumnNumber( l_startLoc );
-        std::string l_indent( ( l_col > 0 ) ? ( l_col - 1 ) : 0, ' ' );
+        // Build record type string
+        {
+            const auto* l_typedefType =
+                l_recordQualifierType->getAs< clang::TypedefType >();
+
+            // Extract typedef
+            if ( l_typedefType ) {
+                l_recordTypeString =
+                    l_typedefType->getDecl()->getNameAsString();
+
+            } else {
+                l_recordTypeString = l_recordQualifierType.getAsString();
+            }
+        }
+
+        logVariable( l_recordTypeString );
 
         // Prepare replacement
         std::string l_replacementText;
 
-        // offsetof/ sizeof
-        std::string l_recordTypeStr;
+        // Build replacement text
+        {
+            // Determine indentation from call location
+            // Use spelling loc for column
+            const clang::SourceLocation l_sourceStartLocation =
+                l_sourceManager.getSpellingLoc(
+                    l_callingExpression->getBeginLoc() );
+            uint l_spellingColumnNumber =
+                l_sourceManager.getSpellingColumnNumber(
+                    l_sourceStartLocation );
+            l_spellingColumnNumber = ( ( l_spellingColumnNumber > 0 )
+                                           ? ( l_spellingColumnNumber - 1 )
+                                           : ( 0 ) );
+            const std::string l_indent( l_spellingColumnNumber, ' ' );
 
-        if ( const auto* l_tdt = l_recordQt->getAs< clang::TypedefType >() ) {
-            l_recordTypeStr = l_tdt->getDecl()->getNameAsString();
+            llvm::raw_string_ostream l_replacementTextStringStream(
+                l_replacementText );
 
-        } else {
-            l_recordTypeStr = l_recordQt.getAsString();
-        }
+            auto l_appendFieldCallToReplacementText =
+                [ & ]( const clang::FieldDecl* _fieldDeclaration ) {
+                    traceEnter();
 
-        logVariable( l_recordTypeStr );
+                    if ( ( !_fieldDeclaration ) ||
+                         ( _fieldDeclaration->isUnnamedBitField() ) ||
+                         ( !_fieldDeclaration->getIdentifier() ) ) {
+                        goto EXIT;
+                    }
 
-        llvm::raw_string_ostream l_ss( l_replacementText );
+                    {
+                        std::string l_fieldName =
+                            _fieldDeclaration->getNameAsString();
 
-        auto l_appendFieldLine = [ & ]( const clang::FieldDecl* _fd ) {
-            if ( ( !_fd ) || ( _fd->isUnnamedBitField() ) ||
-                 ( !_fd->getIdentifier() ) ) {
-                return;
+                        if ( l_fieldName.empty() ) {
+                            goto EXIT;
+                        }
+
+                        std::string l_fieldType =
+                            _fieldDeclaration->getType().getAsString();
+
+                        std::string l_memberAccess;
+
+                        // Build member access
+                        {
+                            const std::string l_baseExpressionTextString =
+                                l_baseExpressionText.str();
+
+                            l_memberAccess =
+                                ( ( l_pointerPassed )
+                                      ? ( "(" + l_baseExpressionTextString +
+                                          ")->" + l_fieldName )
+                                      : ( l_baseExpressionTextString + "." +
+                                          l_fieldName ) );
+                        }
+
+                        const std::string l_fieldReference =
+                            ( "&(" + l_memberAccess + ")" );
+
+                        // callbackName(
+                        //   "fieldName",
+                        //   "fieldType",
+                        //   &( ( variable )->field ),
+                        //   __builtin_offsetof( structType, field ),
+                        //   sizeof( ( ( structType* )0 )->field ) );
+                        l_replacementTextStringStream
+                            << l_indent << l_callbackName << "(" << "\""
+                            << l_fieldName << "\", \"" << l_fieldType << "\", "
+                            << l_fieldReference << ", "
+                            << "__builtin_offsetof(" << l_recordTypeString
+                            << ", " << l_fieldName << "), "
+                            << "sizeof(((" << l_recordTypeString << "*)0)->"
+                            << l_fieldName << "));" << "\n";
+                    }
+
+                EXIT:
+                    traceExit();
+                };
+
+            for ( const clang::FieldDecl* l_fieldDeclaration :
+                  l_recordOriginalDeclaration->fields() ) {
+                l_appendFieldCallToReplacementText( l_fieldDeclaration );
             }
 
-            std::string l_fname = _fd->getNameAsString();
+            l_replacementTextStringStream.flush();
 
-            if ( l_fname.empty() ) {
-                return;
+            l_replacementText.erase( 0, l_indent.length() );
+
+            if ( ( !l_replacementText.empty() ) &&
+                 ( l_replacementText.back() == '\n' ) ) {
+                l_replacementText.pop_back();
             }
-
-            std::string l_ftype = _fd->getType().getAsString();
-            std::string l_memberAccess =
-                ( ( l_pointerPassed )
-                      ? ( "(" + l_baseExprText + ")->" + l_fname )
-                      : ( l_baseExprText + "." + l_fname ) );
-            std::string l_fieldRef = ( "&(" + l_memberAccess + ")" );
-
-            // callbackName( "fieldName", "fieldType", &(variable->field),
-            // __builtin_offsetof( structType, field ), sizeof( ( (structType*)
-            // 0)->field ) );
-            l_ss << l_indent << l_callbackName << "(\"" << l_fname << "\", "
-                 << "\"" << l_ftype << "\", " << l_fieldRef << ", "
-                 << "__builtin_offsetof(" << l_recordTypeStr << ", " << l_fname
-                 << "), "
-                 << "sizeof(((" << l_recordTypeStr << "*)0)->" << l_fname
-                 << "));\n";
-        };
-
-        for ( const clang::FieldDecl* l_fd : l_rd->fields() ) {
-            l_appendFieldLine( l_fd );
-        }
-
-        l_ss.flush();
-
-        l_replacementText.erase( 0, l_indent.length() );
-
-        if ( !l_replacementText.empty() && l_replacementText.back() == '\n' ) {
-            l_replacementText.pop_back();
         }
 
         logVariable( l_replacementText );
 
-        // Replace the entire call (including semicolon) with replacementText
-        clang::SourceLocation l_endLoc = l_call->getEndLoc();
-        clang::SourceLocation l_afterCall =
-            clang::Lexer::getLocForEndOfToken( l_endLoc, 0, l_sm, l_lo );
+        // Replace the entire call (including semicolon) with replacement text
+        {
+            clang::CharSourceRange l_sourceRangeToReplace;
 
-        bool l_includeSemi = false;
+            {
+                const clang::SourceLocation l_sourceEndLocation =
+                    l_callingExpression->getEndLoc();
+                // TODO:Rename
+                const clang::SourceLocation l_lastCharacterSourceLocation =
+                    clang::Lexer::getLocForEndOfToken( l_sourceEndLocation, 0,
+                                                       l_sourceManager,
+                                                       l_langOptions );
 
-        if ( l_afterCall.isValid() ) {
-            clang::SourceLocation l_afterSpelling =
-                l_sm.getSpellingLoc( l_afterCall );
+                bool l_isSemicolonIncluded = false;
 
-            if ( l_afterSpelling.isValid() ) {
-                bool l_invalid = false;
+                if ( l_lastCharacterSourceLocation.isValid() ) {
+                    // TODO: Rename
+                    const clang::SourceLocation l_afterSpelling =
+                        l_sourceManager.getSpellingLoc(
+                            l_lastCharacterSourceLocation );
 
-                const char* l_c =
-                    l_sm.getCharacterData( l_afterSpelling, &l_invalid );
+                    if ( l_afterSpelling.isValid() ) {
+                        bool l_isInvalid = false;
 
-                if ( ( !l_invalid ) && ( l_c ) && ( *l_c == ';' ) ) {
-                    l_includeSemi = true;
+                        const char* l_lastCharacter =
+                            l_sourceManager.getCharacterData( l_afterSpelling,
+                                                              &l_isInvalid );
+
+                        if ( ( !l_isInvalid ) && ( l_lastCharacter ) &&
+                             ( *l_lastCharacter == ';' ) ) {
+                            l_isSemicolonIncluded = true;
+                        }
+                    }
                 }
+
+                const clang::SourceLocation l_replacementSourceEndLocation =
+                    ( ( l_isSemicolonIncluded )
+                          ? ( l_lastCharacterSourceLocation.getLocWithOffset(
+                                1 ) )
+                          : ( l_sourceEndLocation ) );
+
+                l_sourceRangeToReplace = clang::CharSourceRange::getCharRange(
+                    l_callingExpression->getBeginLoc(),
+                    l_replacementSourceEndLocation );
+            }
+
+            // FIX: Log this
+            // logVariable( l_sourceRangeToReplace );
+
+            // Only attempt to query rewritten text/ replace if the range is
+            // valid and in main file
+            if ( ( !l_sourceRangeToReplace.isValid() ) ||
+                 ( !_rewriter.getSourceMgr().isWrittenInMainFile(
+                     l_sourceRangeToReplace.getBegin() ) ) ) {
+                logError( "Invalid or non-main file range for rewrite." );
+
+                goto EXIT;
+            }
+
+            _rewriter.ReplaceText( l_sourceRangeToReplace, l_replacementText );
+
+            // Debug existing rewritten text safely
+            const std::string l_existing =
+                _rewriter.getRewrittenText( l_sourceRangeToReplace );
+
+            if ( l_existing.empty() ) {
+                logError(
+                    "Existing rewritten text is empty or not yet rewritten." );
+
+            } else {
+                log( "Existing rewritten text: " + l_existing );
             }
         }
-
-        clang::SourceLocation l_replaceEnd =
-            ( ( l_includeSemi ) ? ( l_afterCall.getLocWithOffset( 1 ) )
-                                : ( l_endLoc ) );
-        clang::CharSourceRange l_toReplace =
-            clang::CharSourceRange::getCharRange( l_call->getBeginLoc(),
-                                                  l_replaceEnd );
-
-        // Only attempt to query rewritten text / replace if the range is valid
-        // and in main file
-        if ( ( !l_toReplace.isValid() ) ||
-             ( !_rewriter.getSourceMgr().isWrittenInMainFile(
-                 l_toReplace.getBegin() ) ) ) {
-            logError( "Invalid or non-main file range for rewrite." );
-
-            goto EXIT;
-        }
-
-        // optional: debug existing rewritten text safely
-        std::string l_existing = _rewriter.getRewrittenText( l_toReplace );
-
-        if ( l_existing.empty() ) {
-            logError(
-                "Existing rewritten text is empty or not yet rewritten." );
-
-        } else {
-            logError( "Existing rewritten text: " + l_existing );
-        }
-
-        _rewriter.ReplaceText( l_toReplace, l_replacementText );
-
-        log( "performed_replace" );
     }
 
 EXIT:
@@ -476,20 +576,22 @@ void IterateStructUnionHandler::addMatcher( MatchFinder& _matcher,
 
     auto l_handler = std::make_unique< IterateStructUnionHandler >( _rewriter );
 
-    // Canonical record type matcher (handles typedefs/quals)
+    // Canonical record type matcher (handles typedefs/ quals)
     auto l_isRecordType = qualType( hasCanonicalType( recordType() ) );
 
     // Helper matchers
-    auto l_ptrToRecord = pointsTo( l_isRecordType );
+    auto l_pointerToRecord = pointsTo( l_isRecordType );
     auto l_arrayOfRecord = arrayType( hasElementType( l_isRecordType ) );
 
+    // TODO: Imrpve bind names
     // First-argument possibilities:
-    //  - &struct                 -> bind "addrDeclRef"
-    //  - struct*                 -> bind "ptrDeclRef"
-    //  - Array of struct         -> bind "arrayDeclRef" (decays to pointer)
-    //  - getStructPointer()      -> bind "callExprPtr" (call expression that
-    //  yields struct*)
-    //  - (struct S*)expression   -> bind "castToPtr" and inner nodes if
+    //  - &struct                 -> bind "addressDeclarationReference"
+    //  - struct*                 -> bind "pointerDeclarationReference"
+    //  - Array of struct         -> bind "arrayDeclarationReference" (decays to
+    //  pointer)
+    //  - getStructPointer()      -> bind "callingExpressionReference" (call
+    //  expression that yields struct*)
+    //  - (struct S*)expression   -> bind "castingReference" and inner nodes if
     //  available
     auto l_firstArgument = anyOf(
         // &struct
@@ -497,32 +599,32 @@ void IterateStructUnionHandler::addMatcher( MatchFinder& _matcher,
             hasOperatorName( "&" ),
             hasUnaryOperand( ignoringParenImpCasts(
                 declRefExpr( to( varDecl( hasType( l_isRecordType ) ) ) )
-                    .bind( "addrDeclRef" ) ) ) ),
+                    .bind( "addressDeclarationReference" ) ) ) ),
 
         // struct*
         ignoringParenImpCasts(
-            declRefExpr( to( varDecl( hasType( l_ptrToRecord ) ) ) )
-                .bind( "ptrDeclRef" ) ),
+            declRefExpr( to( varDecl( hasType( l_pointerToRecord ) ) ) )
+                .bind( "pointerDeclarationReference" ) ),
 
         // Array of struct
         ignoringParenImpCasts(
             declRefExpr( to( varDecl( hasType( l_arrayOfRecord ) ) ) )
-                .bind( "arrayDeclRef" ) ),
+                .bind( "arrayDeclarationReference" ) ),
 
         // getStructPointer()
-        ignoringParenImpCasts(
-            callExpr( hasType( l_ptrToRecord ) ).bind( "callExprPtr" ) ),
+        ignoringParenImpCasts( callExpr( hasType( l_pointerToRecord ) )
+                                   .bind( "callingExpressionReference" ) ),
 
         // (struct S*)expression
         ignoringParenImpCasts(
             cStyleCastExpr(
-                hasDestinationType( l_ptrToRecord ),
+                hasDestinationType( l_pointerToRecord ),
                 hasSourceExpression( ignoringParenImpCasts( anyOf(
                     declRefExpr( to( varDecl( hasType( l_isRecordType ) ) ) )
-                        .bind( "castDeclRef" ),
-                    callExpr().bind( "castCallExpr" ),
-                    memberExpr().bind( "castMemberExpr" ) ) ) ) )
-                .bind( "castToPtr" ) ) );
+                        .bind( "castingDeclarationReference" ),
+                    callExpr().bind( "castingCallingExpression" ),
+                    memberExpr().bind( "castingMemberExpression" ) ) ) ) )
+                .bind( "castingReference" ) ) );
 
     // Match calls to:
     // iterate_struct(&struct, "callback")
@@ -533,7 +635,7 @@ void IterateStructUnionHandler::addMatcher( MatchFinder& _matcher,
             callee( functionDecl( hasAnyName( "iterate_struct", "iterate_union",
                                               "iterate_struct_union" ) ) ),
             hasArgument( 0, l_firstArgument ),
-            hasArgument( 1, stringLiteral().bind( "macroStr" ) ) )
+            hasArgument( 1, stringLiteral().bind( "callbackName" ) ) )
             .bind( "iterateStructUnionCall" ),
         l_handler.release() );
 
