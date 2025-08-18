@@ -93,7 +93,7 @@ void IterateArgumentsHandler::run( const MatchFinder::MatchResult& _result ) {
 
                 std::string l_parameterTypeString;
 
-                // Build
+                // Build parameter type string
                 {
                     clang::QualType l_parameterType = l_parameter->getType();
 
@@ -223,7 +223,7 @@ void IterateArgumentsHandler::addMatcher( MatchFinder& _matcher,
 
     auto l_handler = std::make_unique< IterateArgumentsHandler >( _rewriter );
 
-    // Match calls to iterate_arguments(&struct, "callback")
+    // Match calls to iterate_arguments("callback")
     _matcher.addMatcher(
         callExpr(
             callee( functionDecl( hasName( "iterate_arguments" ) ) ),

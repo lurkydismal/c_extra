@@ -19,67 +19,93 @@ IterateEnumHandler::IterateEnumHandler( clang::Rewriter& _rewriter )
 void IterateEnumHandler::run( const MatchFinder::MatchResult& _result ) {
     traceEnter();
 
-    clang::SourceManager& l_sm = *_result.SourceManager;
-    clang::LangOptions l_lo = _result.Context->getLangOpts();
+    clang::SourceManager& l_sourceManager = *( _result.SourceManager );
+    clang::LangOptions l_langOptions = _result.Context->getLangOpts();
 
-    // Helper: get token-range source text for an Expr, fallback on
-    // 'fallback'
+    // Helper: get token-range source text for an Expr, fallback on '_fallback'
     auto l_getSourceTextOrFallback =
-        [ & ]( const clang::Expr* _e,
-               const std::string& _fallback ) -> std::string {
-        if ( !_e ) {
-            return ( _fallback );
+        [ & ]( const clang::Expr* _expression,
+               const clang::StringRef _fallbackResult ) -> clang::StringRef {
+        traceEnter();
+
+        clang::StringRef l_returnValue = _fallbackResult;
+
+        if ( !_expression ) {
+            goto EXIT;
         }
 
-        clang::CharSourceRange l_r =
-            clang::CharSourceRange::getTokenRange( _e->getSourceRange() );
+        {
+            clang::CharSourceRange l_sourceRange =
+                clang::CharSourceRange::getTokenRange(
+                    _expression->getSourceRange() );
 
-        if ( !l_r.isValid() ) {
-            return ( _fallback );
-        }
-
-        clang::Expected< clang::StringRef > l_txt =
-            clang::Lexer::getSourceText( l_r, l_sm, l_lo );
-
-        if ( l_txt ) {
-            // TODO: Test
-            traceExit();
-
-            return ( l_txt->str() );
-        }
-
-        return ( _fallback );
-    };
-
-    // Helper: extract the underlying record QualType from a VarDecl.
-    // If pointerPassed==true, try to return pointee type.
-    auto l_getEnumTypeFromVar = [ & ](
-                                    const clang::VarDecl* _vd,
-                                    bool _pointerPassed ) -> clang::QualType {
-        if ( !_vd )
-            return {};
-
-        clang::QualType l_qt = _vd->getType();
-
-        if ( _pointerPassed ) {
-            if ( l_qt->isPointerType() ) {
-                return ( l_qt->getPointeeType().getUnqualifiedType() );
+            if ( !l_sourceRange.isValid() ) {
+                goto EXIT;
             }
 
-            auto* l_rt = l_qt->getAs< clang::ReferenceType >();
+            clang::Expected< clang::StringRef > l_sourceText =
+                clang::Lexer::getSourceText( l_sourceRange, l_sourceManager,
+                                             l_langOptions );
 
-            if ( l_rt ) {
-                return ( ( l_rt->getPointeeType().getUnqualifiedType() ) );
+            if ( l_sourceText ) {
+                l_returnValue = l_sourceText.get();
             }
         }
 
-        return ( l_qt.getUnqualifiedType() );
+    EXIT:
+        traceExit();
+
+        return ( l_returnValue );
     };
 
-    const auto* l_call =
-        _result.Nodes.getNodeAs< clang::CallExpr >( "enumCall" );
-    if ( !l_call )
+    // Helper: extract the underlying enum QualType from a VarDecl.
+    // NOTE: If pointerPassed==true, try to return pointee type.
+    auto l_getEnumTypeFromVariable =
+        [ & ]( const clang::VarDecl* _variableDeclaration,
+               const bool _pointerPassed ) -> clang::QualType {
+        traceEnter();
+
+        clang::QualType l_returnValue = {};
+
+        if ( !_variableDeclaration ) {
+            goto EXIT;
+        }
+
+        {
+            clang::QualType l_qualifierType = _variableDeclaration->getType();
+
+            l_returnValue = l_qualifierType.getUnqualifiedType();
+
+            if ( _pointerPassed ) {
+                if ( l_qualifierType->isPointerType() ) {
+                    l_returnValue =
+                        l_qualifierType->getPointeeType().getUnqualifiedType();
+                }
+
+                auto* l_referenceType =
+                    l_qualifierType->getAs< clang::ReferenceType >();
+
+                if ( l_referenceType ) {
+                    l_returnValue =
+                        l_referenceType->getPointeeType().getUnqualifiedType();
+                }
+            }
+        }
+
+    EXIT:
+        traceExit();
+
+        return ( l_returnValue );
+    };
+
+    const auto* l_callingExpression =
+        _result.Nodes.getNodeAs< clang::CallExpr >( "iterateEnumCall" );
+
+    logVariable( l_callingExpression );
+
+    if ( !l_callingExpression ) {
         goto EXIT;
+    }
 
     {
         const auto* l_callbackNameLiteral =
@@ -95,242 +121,414 @@ void IterateEnumHandler::run( const MatchFinder::MatchResult& _result ) {
             logVariable( l_callbackName );
 
             // Bindings from matcher:
-            const auto* l_addrDeclRef =
-                _result.Nodes.getNodeAs< clang::DeclRefExpr >( "addrDeclRef" );
-            const auto* l_ptrDeclRef =
-                _result.Nodes.getNodeAs< clang::DeclRefExpr >( "ptrDeclRef" );
-            const auto* l_arrayDeclRef =
-                _result.Nodes.getNodeAs< clang::DeclRefExpr >( "arrayDeclRef" );
-            const auto* l_callExprPtr =
-                _result.Nodes.getNodeAs< clang::CallExpr >( "callExprPtr" );
-            const auto* l_castToPtr =
-                _result.Nodes.getNodeAs< clang::CStyleCastExpr >( "castToPtr" );
-            const auto* l_castDeclRef =
-                _result.Nodes.getNodeAs< clang::DeclRefExpr >( "castDeclRef" );
-            const auto* l_castCallExpr =
-                _result.Nodes.getNodeAs< clang::CallExpr >( "castCallExpr" );
-            const auto* l_castMemberExpr =
+            const auto* l_addressDeclarationReference =
+                _result.Nodes.getNodeAs< clang::DeclRefExpr >(
+                    "addressDeclarationReference" );
+            const auto* l_pointerDeclarationReference =
+                _result.Nodes.getNodeAs< clang::DeclRefExpr >(
+                    "pointerDeclarationReference" );
+            const auto* l_arrayDeclarationReference =
+                _result.Nodes.getNodeAs< clang::DeclRefExpr >(
+                    "arrayDeclarationReference" );
+            const auto* l_callingExpressionReference =
+                _result.Nodes.getNodeAs< clang::CallExpr >(
+                    "callingExpressionReference" );
+
+            const auto* l_castingReference =
+                _result.Nodes.getNodeAs< clang::CStyleCastExpr >(
+                    "castingReference" );
+            const auto* l_castingDeclarationReference =
+                _result.Nodes.getNodeAs< clang::DeclRefExpr >(
+                    "castingDeclarationReference" );
+            const auto* l_castingCallingExpression =
+                _result.Nodes.getNodeAs< clang::CallExpr >(
+                    "castingCallingExpression" );
+            const auto* l_castingMemberExpression =
                 _result.Nodes.getNodeAs< clang::MemberExpr >(
-                    "castMemberExpr" );
+                    "castingMemberExpression" );
 
-            std::string l_baseExprText;
+            clang::StringRef l_baseExpressionText;
             bool l_pointerPassed = false;
-            clang::QualType l_enumQt;
-            const clang::VarDecl* l_varDecl = nullptr;
+            clang::QualType l_enumQualifierType;
+            const clang::VarDecl* l_variableDeclaration = nullptr;
 
-            if ( l_addrDeclRef ) {
-                l_pointerPassed = false;
-                logVariable( l_pointerPassed );
-                l_varDecl = llvm::dyn_cast< clang::VarDecl >(
-                    l_addrDeclRef->getDecl() );
-                if ( !l_varDecl ) {
-                    logError( "addrDeclRef is not a VarDecl" );
-                    goto EXIT;
-                }
-                logVariable( l_varDecl );
-                l_baseExprText = l_getSourceTextOrFallback(
-                    l_addrDeclRef, l_varDecl->getNameAsString() );
-                logVariable( l_baseExprText );
-                l_enumQt =
-                    l_getEnumTypeFromVar( l_varDecl, /*pointerPassed=*/false );
-                logVariable( l_enumQt );
-            } else if ( l_ptrDeclRef ) {
-                l_pointerPassed = true;
-                logVariable( l_pointerPassed );
-                l_varDecl =
-                    llvm::dyn_cast< clang::VarDecl >( l_ptrDeclRef->getDecl() );
-                if ( !l_varDecl ) {
-                    logError( "ptrDeclRef is not a VarDecl" );
-                    goto EXIT;
-                }
-                logVariable( l_varDecl );
-                l_baseExprText = l_getSourceTextOrFallback(
-                    l_ptrDeclRef, l_varDecl->getNameAsString() );
-                logVariable( l_baseExprText );
-                l_enumQt =
-                    l_getEnumTypeFromVar( l_varDecl, /*pointerPassed=*/true );
-                logVariable( l_enumQt );
-            } else if ( l_arrayDeclRef ) {
-                l_pointerPassed = true;
-                logVariable( l_pointerPassed );
-                l_varDecl = llvm::dyn_cast< clang::VarDecl >(
-                    l_arrayDeclRef->getDecl() );
-                if ( !l_varDecl ) {
-                    logError( "arrayDeclRef is not a VarDecl" );
-                    goto EXIT;
-                }
-                logVariable( l_varDecl );
-                l_baseExprText = l_getSourceTextOrFallback(
-                    l_arrayDeclRef, l_varDecl->getNameAsString() );
-                logVariable( l_baseExprText );
-                // Get element type of array
-                if ( const clang::Type* l_tp =
-                         l_varDecl->getType().getTypePtrOrNull() ) {
-                    if ( auto* l_at =
-                             llvm::dyn_cast< clang::ArrayType >( l_tp ) ) {
-                        l_enumQt = l_at->getElementType().getUnqualifiedType();
-                    } else {
-                        l_enumQt = l_getEnumTypeFromVar(
-                            l_varDecl, /*pointerPassed=*/false );
-                    }
-                } else {
-                    l_enumQt = l_getEnumTypeFromVar( l_varDecl,
-                                                     /*pointerPassed=*/false );
-                }
-                logVariable( l_enumQt );
-            } else if ( l_callExprPtr ) {
-                l_pointerPassed = true;
-                logVariable( l_pointerPassed );
-                l_baseExprText = l_getSourceTextOrFallback( l_callExprPtr, "" );
-                logVariable( l_baseExprText );
-                clang::QualType l_t = l_callExprPtr->getType();
-                if ( !l_t.isNull() )
-                    l_enumQt = l_t->getPointeeType().getUnqualifiedType();
-                logVariable( l_enumQt );
-            } else if ( l_castToPtr ) {
-                l_pointerPassed = true;
-                logVariable( l_pointerPassed );
-                clang::QualType l_castDest = l_castToPtr->getType();
-                if ( !l_castDest.isNull() )
-                    l_enumQt =
-                        l_castDest->getPointeeType().getUnqualifiedType();
-                logVariable( l_enumQt );
-                // Try to recover inner expression for base text
-                if ( l_castDeclRef ) {
-                    l_varDecl = llvm::dyn_cast< clang::VarDecl >(
-                        l_castDeclRef->getDecl() );
-                    if ( l_varDecl ) {
-                        logVariable( l_varDecl );
-                        l_baseExprText = l_getSourceTextOrFallback(
-                            l_castDeclRef, l_varDecl->getNameAsString() );
-                        logVariable( l_baseExprText );
-                    }
-                }
-                if ( l_baseExprText.empty() && l_castCallExpr ) {
-                    l_baseExprText =
-                        l_getSourceTextOrFallback( l_castCallExpr, "" );
-                    logVariable( l_baseExprText );
-                }
-                if ( l_baseExprText.empty() && l_castMemberExpr ) {
-                    l_baseExprText =
-                        l_getSourceTextOrFallback( l_castMemberExpr, "" );
-                    logVariable( l_baseExprText );
-                }
-                if ( l_baseExprText.empty() ) {
-                    l_baseExprText =
-                        l_getSourceTextOrFallback( l_castToPtr, "" );
-                    logVariable( l_baseExprText );
-                }
-            } else {
-                logError( "No matching first-argument pattern found" );
-                goto EXIT;
-            }
+            logVariable( l_variableDeclaration );
 
-            if ( l_enumQt.isNull() ) {
-                logError( "Enum type is null" );
-                goto EXIT;
-            }
-            {
-                const clang::EnumType* l_et =
-                    l_enumQt->getAs< clang::EnumType >();
-                if ( !l_et ) {
-                    logError( "First argument is not an enum type" );
-                    goto EXIT;
-                }
-                clang::EnumDecl* l_ed = l_et->getOriginalDecl();
-                clang::EnumDecl* l_rd = l_ed->getDefinition();
-                if ( !l_rd ) {
-                    logError( "Enum has no definition (forward-decl): " +
-                              l_varDecl->getNameAsString() );
-                    goto EXIT;
-                }
-                logVariable( l_rd );
+            auto l_extractDeclarationContext =
+                [ & ]( const clang::DeclRefExpr* _declarationReference,
+                       const bool _pointerPassed ) {
+                    traceEnter();
 
-                {
-                    // Underlying integer type of enum
-                    clang::QualType l_underQt = l_rd->getIntegerType();
-                    std::string l_underTypeStr;
+                    l_variableDeclaration = llvm::dyn_cast< clang::VarDecl >(
+                        _declarationReference->getDecl() );
 
-                    if ( auto* l_tdt =
-                             l_underQt->getAs< clang::TypedefType >() ) {
-                        l_underTypeStr = l_tdt->getDecl()->getNameAsString();
-                    } else {
-                        l_underTypeStr = l_underQt.getAsString();
-                    }
-                    logVariable( l_underTypeStr );
+                    logVariable( l_variableDeclaration );
 
-                    // Determine indent for the generated lines
-                    clang::SourceLocation l_startLoc =
-                        l_sm.getSpellingLoc( l_call->getBeginLoc() );
-                    unsigned l_col = l_sm.getSpellingColumnNumber( l_startLoc );
-                    std::string l_indent( ( l_col > 0 ) ? ( l_col - 1 ) : 0,
-                                          ' ' );
+                    if ( !l_variableDeclaration ) {
+                        logError( "Does not refer to a VarDecl" );
 
-                    // Generate replacement text: one callback call per
-                    // enumerator
-                    std::string l_replacementText;
-                    llvm::raw_string_ostream l_ss( l_replacementText );
-                    for ( const clang::EnumConstantDecl* l_ec :
-                          l_rd->enumerators() ) {
-                        if ( !l_ec || l_ec->getNameAsString().empty() )
-                            continue;
-                        std::string l_name = l_ec->getNameAsString();
-                        llvm::APSInt l_val = l_ec->getInitVal();
-                        clang::SmallVector< char > l_valStr;
-                        l_val.toString( l_valStr );
-                        l_ss << l_indent << l_callbackName << "(\"" << l_name
-                             << "\", "
-                             << "\"" << l_underTypeStr << "\", "
-                             << "(" << l_underTypeStr << ")" << l_valStr
-                             << ");\n";
-                    }
-                    l_ss.flush();
-
-                    // Remove indent on first line and trailing newline
-                    l_replacementText.erase( 0, l_indent.length() );
-                    if ( !l_replacementText.empty() &&
-                         l_replacementText.back() == '\n' )
-                        l_replacementText.pop_back();
-                    logVariable( l_replacementText );
-
-                    // Replace the call (including semicolon if present)
-                    clang::SourceLocation l_endLoc = l_call->getEndLoc();
-                    clang::SourceLocation l_afterCall =
-                        clang::Lexer::getLocForEndOfToken( l_endLoc, 0, l_sm,
-                                                           l_lo );
-                    bool l_includeSemi = false;
-                    if ( l_afterCall.isValid() ) {
-                        clang::SourceLocation l_afterSpelling =
-                            l_sm.getSpellingLoc( l_afterCall );
-                        bool l_invalid = false;
-                        const char* l_c = l_sm.getCharacterData(
-                            l_afterSpelling, &l_invalid );
-                        if ( !l_invalid && l_c && *l_c == ';' ) {
-                            l_includeSemi = true;
-                        }
-                    }
-                    clang::SourceLocation l_replaceEnd =
-                        ( l_includeSemi ? l_afterCall.getLocWithOffset( 1 )
-                                        : l_endLoc );
-                    clang::CharSourceRange l_toReplace =
-                        clang::CharSourceRange::getCharRange(
-                            l_call->getBeginLoc(), l_replaceEnd );
-                    if ( !l_toReplace.isValid() ||
-                         !_rewriter.getSourceMgr().isWrittenInMainFile(
-                             l_toReplace.getBegin() ) ) {
-                        logError( "Invalid range for rewrite" );
                         goto EXIT;
                     }
-                    {
-                        std::string l_existing =
-                            _rewriter.getRewrittenText( l_toReplace );
-                        if ( !l_existing.empty() ) {
-                            logError( "Existing rewritten text: " +
-                                      l_existing );
-                        }
-                        _rewriter.ReplaceText( l_toReplace, l_replacementText );
-                        log( "performed_replace" );
+
+                    l_baseExpressionText = l_getSourceTextOrFallback(
+                        _declarationReference,
+                        l_variableDeclaration->getNameAsString() );
+
+                    logVariable( l_baseExpressionText );
+
+                    l_enumQualifierType = l_getEnumTypeFromVariable(
+                        l_variableDeclaration, l_pointerPassed );
+
+                    logVariable( l_enumQualifierType );
+
+                EXIT:
+                    traceExit();
+                };
+
+            // Order of precedence: &struct, struct*, array of struct,
+            // getStructPointer(), (struct S*)expression (if casted from
+            // declref), (struct S*)expression.
+            if ( l_addressDeclarationReference ) {
+                // &var  -> base is var, pointerPassed = false
+                l_pointerPassed = false;
+
+                l_extractDeclarationContext( l_addressDeclarationReference,
+                                             l_pointerPassed );
+
+            } else if ( l_pointerDeclarationReference ) {
+                // Pointer variable passed -> base is var, pointerPassed = true
+                l_pointerPassed = true;
+
+                l_extractDeclarationContext( l_pointerDeclarationReference,
+                                             l_pointerPassed );
+
+            } else if ( l_arrayDeclarationReference ) {
+                // Array variable passed (decays to pointer)
+                l_pointerPassed = true;
+
+                l_extractDeclarationContext( l_arrayDeclarationReference,
+                                             l_pointerPassed );
+
+                // Extract element type from array type
+                const clang::Type* l_variableDeclarationType =
+                    l_variableDeclaration->getType().getTypePtrOrNull();
+
+                if ( l_variableDeclarationType ) {
+                    const auto* l_arrayType =
+                        llvm::dyn_cast< clang::ArrayType >(
+                            l_variableDeclarationType );
+
+                    if ( l_arrayType ) {
+                        l_enumQualifierType =
+                            l_arrayType->getElementType().getUnqualifiedType();
+
+                        logVariable( l_enumQualifierType );
                     }
+                }
+
+            } else if ( l_callingExpressionReference ) {
+                // Call expression that returns struct*
+                l_pointerPassed = true;
+
+                l_baseExpressionText = l_getSourceTextOrFallback(
+                    l_callingExpressionReference, "" );
+
+                logVariable( l_baseExpressionText );
+
+                const clang::QualType l_qualifierType =
+                    l_callingExpressionReference->getType();
+
+                if ( l_qualifierType.isNull() ) {
+                    logError( "TODO: WRITE" );
+
+                    goto EXIT;
+                }
+
+                l_enumQualifierType =
+                    l_qualifierType->getPointeeType().getUnqualifiedType();
+
+                logVariable( l_enumQualifierType );
+
+            } else if ( l_castingReference ) {
+                // Explicit cast to struct*
+                // We matched hasDestinationType(pointer-to-enum))
+                l_pointerPassed = true;
+
+                // Destination type's pointee is the enum type
+                clang::QualType l_castingDestinationQualifierType =
+                    l_castingReference->getType();
+
+                if ( l_castingDestinationQualifierType.isNull() ) {
+                    logError( "TODO: WRITE2" );
+
+                    goto EXIT;
+                }
+
+                l_enumQualifierType =
+                    l_castingDestinationQualifierType->getPointeeType()
+                        .getUnqualifiedType();
+
+                logVariable( l_enumQualifierType );
+
+                bool l_found = false;
+
+                // Prefer a bound inner decl
+                if ( l_castingDeclarationReference ) {
+                    l_variableDeclaration = llvm::dyn_cast< clang::VarDecl >(
+                        l_castingDeclarationReference->getDecl() );
+
+                    logVariable( l_variableDeclaration );
+
+                    if ( l_variableDeclaration ) {
+                        l_baseExpressionText = l_getSourceTextOrFallback(
+                            l_castingDeclarationReference,
+                            l_variableDeclaration->getNameAsString() );
+
+                        logVariable( l_baseExpressionText );
+
+                        l_found = true;
+                    }
+                }
+
+                // Else if casted - from call expression
+                if ( !l_found && l_castingCallingExpression ) {
+                    l_baseExpressionText = l_getSourceTextOrFallback(
+                        l_castingCallingExpression, "" );
+
+                    l_found = !l_baseExpressionText.empty();
+                }
+
+                // Else if casted - from member expression
+                if ( !l_found && l_castingMemberExpression ) {
+                    l_baseExpressionText = l_getSourceTextOrFallback(
+                        l_castingMemberExpression, "" );
+
+                    l_found = !l_baseExpressionText.empty();
+                }
+
+                // As a final fallback, use the whole cast expression text
+                if ( !l_found ) {
+                    l_baseExpressionText =
+                        l_getSourceTextOrFallback( l_castingReference, "" );
+
+                    l_found = !l_baseExpressionText.empty();
+                }
+
+                logVariable( l_baseExpressionText );
+
+            } else {
+                // Nothing matched
+                // Should not happen if matcher and bindings are correct
+                logError( "No matching first-argument pattern found." );
+
+                goto EXIT;
+            }
+
+            if ( l_enumQualifierType.isNull() ) {
+                logError( "Enum type is null" );
+
+                goto EXIT;
+            }
+
+            const clang::EnumType* l_enumType =
+                l_enumQualifierType->getAs< clang::EnumType >();
+
+            if ( !l_enumType ) {
+                logError( "First argument is not an enum type" );
+
+                goto EXIT;
+            }
+
+            clang::EnumDecl* l_enumDeclaration = l_enumType->getOriginalDecl();
+
+            logVariable( l_enumDeclaration );
+
+            if ( !l_enumDeclaration ) {
+                logError( "Original EnumDecl missing." );
+
+                goto EXIT;
+            }
+
+            l_enumDeclaration = l_enumDeclaration->getDefinition();
+
+            logVariable( l_enumDeclaration );
+
+            if ( !l_enumDeclaration ) {
+                logError( "Enum has no definition (forward-decl): " +
+                          l_variableDeclaration->getNameAsString() );
+
+                goto EXIT;
+            }
+
+            // Underlying integer type of enum
+            std::string l_fieldUnderlyingType;
+
+            {
+                const clang::QualType l_underlyingQualifierType =
+                    l_enumDeclaration->getIntegerType();
+
+                const auto* l_typedefType =
+                    l_underlyingQualifierType->getAs< clang::TypedefType >();
+
+                if ( l_typedefType ) {
+                    l_fieldUnderlyingType =
+                        l_typedefType->getDecl()->getNameAsString();
+
+                } else {
+                    l_fieldUnderlyingType =
+                        l_underlyingQualifierType.getAsString();
+                }
+            }
+
+            logVariable( l_fieldUnderlyingType );
+
+            std::string l_replacementText;
+
+            // Build replacement text
+            {
+                // Determine indentation from call location
+                // Use spelling loc for column
+                const clang::SourceLocation l_sourceStartLocation =
+                    l_sourceManager.getSpellingLoc(
+                        l_callingExpression->getBeginLoc() );
+                uint l_spellingColumnNumber =
+                    l_sourceManager.getSpellingColumnNumber(
+                        l_sourceStartLocation );
+                l_spellingColumnNumber = ( ( l_spellingColumnNumber > 0 )
+                                               ? ( l_spellingColumnNumber - 1 )
+                                               : ( 0 ) );
+                const std::string l_indent( l_spellingColumnNumber, ' ' );
+
+                llvm::raw_string_ostream l_replacementTextStringStream(
+                    l_replacementText );
+
+                for ( const clang::EnumConstantDecl* l_ec :
+                      l_enumDeclaration->enumerators() ) {
+                    if ( !l_ec || l_ec->getNameAsString().empty() )
+                        continue;
+                    std::string l_fieldName = l_ec->getNameAsString();
+
+                    logVariable( l_fieldName );
+
+                    if ( l_fieldName.empty() ) {
+                        logError( "Field has no name." );
+
+                        goto EXIT;
+                    }
+
+                    llvm::APSInt l_fieldValue = l_ec->getInitVal();
+
+                    logVariable( l_fieldValue );
+
+                    clang::SmallVector< char > l_fieldValueAsString;
+
+                    l_fieldValue.toString( l_fieldValueAsString );
+
+                    logVariable( l_fieldValueAsString );
+
+                    // callbackName(
+                    //   "fieldName",
+                    //   "fieldType",
+                    //   fieldValue,
+                    //   sizeof( fieldType ) );
+                    l_replacementTextStringStream
+                        << l_indent << l_callbackName << "(" << "\""
+                        << l_fieldName << "\", "
+                        << "\"" << l_fieldUnderlyingType << "\", "
+                        << "(" << l_fieldUnderlyingType << ")"
+                        << l_fieldValueAsString << ", " << "sizeof("
+                        << l_fieldUnderlyingType << ")" << ");\n";
+                }
+
+                l_replacementTextStringStream.flush();
+
+                // Remove indent on first line and trailing newline
+                l_replacementTextStringStream.flush();
+
+                l_replacementText.erase( 0, l_indent.length() );
+
+                if ( ( !l_replacementText.empty() ) &&
+                     ( l_replacementText.back() == '\n' ) ) {
+                    l_replacementText.pop_back();
+                }
+            }
+            logVariable( l_replacementText );
+
+            // Replace the entire call (including semicolon) with
+            // replacement text
+            {
+                clang::CharSourceRange l_sourceRangeToReplace;
+
+                {
+                    const clang::SourceLocation l_sourceEndLocation =
+                        l_callingExpression->getEndLoc();
+                    // TODO:Rename
+                    const clang::SourceLocation l_lastCharacterSourceLocation =
+                        clang::Lexer::getLocForEndOfToken( l_sourceEndLocation,
+                                                           0, l_sourceManager,
+                                                           l_langOptions );
+
+                    bool l_isSemicolonIncluded = false;
+
+                    if ( l_lastCharacterSourceLocation.isValid() ) {
+                        // TODO: Rename
+                        const clang::SourceLocation l_afterSpelling =
+                            l_sourceManager.getSpellingLoc(
+                                l_lastCharacterSourceLocation );
+
+                        if ( l_afterSpelling.isValid() ) {
+                            bool l_isInvalid = false;
+
+                            const char* l_lastCharacter =
+                                l_sourceManager.getCharacterData(
+                                    l_afterSpelling, &l_isInvalid );
+
+                            if ( ( !l_isInvalid ) && ( l_lastCharacter ) &&
+                                 ( *l_lastCharacter == ';' ) ) {
+                                l_isSemicolonIncluded = true;
+                            }
+                        }
+                    }
+
+                    const clang::SourceLocation l_replacementSourceEndLocation =
+                        ( ( l_isSemicolonIncluded )
+                              ? ( l_lastCharacterSourceLocation
+                                      .getLocWithOffset( 1 ) )
+                              : ( l_sourceEndLocation ) );
+
+                    l_sourceRangeToReplace =
+                        clang::CharSourceRange::getCharRange(
+                            l_callingExpression->getBeginLoc(),
+                            l_replacementSourceEndLocation );
+                }
+
+                // FIX: Log this
+                // logVariable( l_sourceRangeToReplace );
+
+                // Only attempt to query rewritten text/ replace if the
+                // range is valid and in main file
+                if ( ( !l_sourceRangeToReplace.isValid() ) ||
+                     ( !_rewriter.getSourceMgr().isWrittenInMainFile(
+                         l_sourceRangeToReplace.getBegin() ) ) ) {
+                    logError( "Invalid or non-main file range for rewrite." );
+
+                    goto EXIT;
+                }
+
+                _rewriter.ReplaceText( l_sourceRangeToReplace,
+                                       l_replacementText );
+
+                // Debug existing rewritten text safely
+                const std::string l_existing =
+                    _rewriter.getRewrittenText( l_sourceRangeToReplace );
+
+                if ( l_existing.empty() ) {
+                    logError(
+                        "Existing rewritten text is empty or not yet "
+                        "rewritten." );
+
+                } else {
+                    log( "Existing rewritten text: " + l_existing );
                 }
             }
         }
@@ -350,16 +548,17 @@ void IterateEnumHandler::addMatcher( MatchFinder& _matcher,
     auto l_isEnumType = qualType( hasCanonicalType( enumType() ) );
 
     // Helper matchers
-    auto l_ptrToEnum = pointsTo( l_isEnumType );
+    auto l_pointerToEnum = pointsTo( l_isEnumType );
     auto l_arrayOfEnum = arrayType( hasElementType( l_isEnumType ) );
 
     // First-argument possibilities:
-    //  - &variable              -> bind "addrDeclRef"
-    //  - variable*              -> bind "ptrDeclRef"
-    //  - Array of enum          -> bind "arrayDeclRef" (decays to pointer)
-    //  - getEnumPointer()       -> bind "callExprPtr" (call expression that
-    //  yields enum*)
-    //  - (enum S*)expression    -> bind "castToPtr" and inner nodes if
+    //  - &variable              -> bind "addressDeclarationReference"
+    //  - variable*              -> bind "pointerDeclarationReference"
+    //  - Array of enum          -> bind "arrayDeclarationReference" (decays to
+    //  pointer)
+    //  - getEnumPointer()       -> bind "callingExpressionReference" (call
+    //  expression that yields enum*)
+    //  - (enum S*)expression    -> bind "castingReference" and inner nodes if
     //  available
     auto l_firstArgument = anyOf(
         // &enum
@@ -367,47 +566,40 @@ void IterateEnumHandler::addMatcher( MatchFinder& _matcher,
             hasOperatorName( "&" ),
             hasUnaryOperand( ignoringParenImpCasts(
                 declRefExpr( to( varDecl( hasType( l_isEnumType ) ) ) )
-                    .bind( "addrDeclRef" ) ) ) ),
+                    .bind( "addressDeclarationReference" ) ) ) ),
 
         // enum*
         ignoringParenImpCasts(
-            declRefExpr( to( varDecl( hasType( l_ptrToEnum ) ) ) )
-                .bind( "ptrDeclRef" ) ),
+            declRefExpr( to( varDecl( hasType( l_pointerToEnum ) ) ) )
+                .bind( "pointerDeclarationReference" ) ),
 
         // Array of enum
         ignoringParenImpCasts(
             declRefExpr( to( varDecl( hasType( l_arrayOfEnum ) ) ) )
-                .bind( "arrayDeclRef" ) ),
+                .bind( "arrayDeclarationReference" ) ),
 
         // getEnumPointer()
-        ignoringParenImpCasts(
-            callExpr( hasType( l_ptrToEnum ) ).bind( "callExprPtr" ) ),
+        ignoringParenImpCasts( callExpr( hasType( l_pointerToEnum ) )
+                                   .bind( "callingExpressionReference" ) ),
 
         // (enum S*)expression
         ignoringParenImpCasts(
             cStyleCastExpr(
-                hasDestinationType( l_ptrToEnum ),
+                hasDestinationType( l_pointerToEnum ),
                 hasSourceExpression( ignoringParenImpCasts( anyOf(
                     declRefExpr( to( varDecl( hasType( l_isEnumType ) ) ) )
-                        .bind( "castDeclRef" ),
-                    callExpr().bind( "castCallExpr" ),
-                    memberExpr().bind( "castMemberExpr" ) ) ) ) )
-                .bind( "castToPtr" ) ) );
+                        .bind( "castingDeclarationReference" ),
+                    callExpr().bind( "castingCallingExpression" ),
+                    memberExpr().bind( "castingMemberExpression" ) ) ) ) )
+                .bind( "castingReference" ) ) );
 
-    // Match calls to iterate_enum(&struct, "callback")
+    // Match calls to iterate_enum(&enum, "callback")
     _matcher.addMatcher(
         callExpr( callee( functionDecl( hasName( "iterate_enum" ) ) ),
                   hasArgument( 0, l_firstArgument ),
                   hasArgument( 1, stringLiteral().bind( "callbackName" ) ) )
-            .bind( "enumCall" ),
+            .bind( "iterateEnumCall" ),
         l_handler.release() );
-
-    // Canonical record type matcher (handles typedefs/ quals)
-    auto l_isRecordType = qualType( hasCanonicalType( recordType() ) );
-
-    // Helper matchers
-    auto l_ptrToRecord = pointsTo( l_isRecordType );
-    auto l_arrayOfRecord = arrayType( hasElementType( l_isRecordType ) );
 
     traceExit();
 }

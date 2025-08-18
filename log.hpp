@@ -11,7 +11,7 @@
 
 // TODO: Decide on this
 // Function file:line | message
-#define LOG_INFO_FORMAT                                                \
+#define LOG_ERROR_FORMAT                                               \
     "\"" << __PRETTY_FUNCTION__ << "\"" << " " << __FILE_NAME__ << ":" \
          << __LINE__ << " | "
 
@@ -32,7 +32,7 @@
     } while ( 0 )
 
 #define logError( _message ) \
-    llvm::errs() << LOG_ERROR_PREFIX << ( _message ) << "\n";
+    llvm::errs() << LOG_ERROR_PREFIX LOG_ERROR_FORMAT << ( _message ) << "\n";
 
 #define logVariable( _variable )                                            \
     do {                                                                    \
