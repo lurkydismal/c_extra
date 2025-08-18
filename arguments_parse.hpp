@@ -11,12 +11,14 @@ extern std::string g_prefix;
 extern std::string g_extension;
 
 // Flags
+extern bool g_isVerboseRun;
 extern bool g_isQuietRun;
 extern bool g_isDryRun;
 extern bool g_needEditInPlace;
 extern bool g_needOnlyPrintResult;
 extern bool g_needDefaultIncludePaths;
 extern bool g_needDefaultSystemIncludePaths;
+extern bool g_needWarningsAsErrors;
 extern bool g_isCheckOnly;
 extern bool g_needTrace;
 

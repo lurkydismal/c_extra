@@ -21,12 +21,14 @@ std::string g_prefix = ".";
 std::string g_extension;
 
 // Flags
+bool g_isVerboseRun = false;
 bool g_isQuietRun = false;
 bool g_isDryRun = false;
 bool g_needEditInPlace = false;
 bool g_needOnlyPrintResult = false;
 bool g_needDefaultIncludePaths = true;
 bool g_needDefaultSystemIncludePaths = true;
+bool g_needWarningsAsErrors = false;
 bool g_isCheckOnly = false;
 bool g_needTrace = false;
 
@@ -41,6 +43,7 @@ const char* argp_program_version;
 const char* argp_program_bug_address;
 
 enum class parserOption : int16_t {
+    verbose = 'v',
     quiet = 'q',
     dryRun = 'd',
     sourceDirectory = 's',
@@ -54,8 +57,9 @@ enum class parserOption : int16_t {
     include = 'I',
     disableDefaultIncludes = 1001,
     disableDefaultSystemIncludes = 1002,
+    warningsAsErrors = 'W',
     checkOnly = 'c',
-    trace = 1003,
+    trace = 1004,
 };
 
 static auto parserForOption( int _key, char* _value, struct argp_state* _state )
@@ -65,7 +69,15 @@ static auto parserForOption( int _key, char* _value, struct argp_state* _state )
     error_t l_returnValue = 0;
 
     switch ( _key ) {
+        case ( int )parserOption::verbose: {
+            g_isVerboseRun = true;
+            g_isQuietRun = false;
+
+            break;
+        }
+
         case ( int )parserOption::quiet: {
+            g_isVerboseRun = false;
             g_isQuietRun = true;
 
             break;
@@ -216,9 +228,9 @@ auto parseArguments( int _argumentCount, char** _argumentVector ) -> bool {
                 ( std::string( g_applicationIdentifier ) + " - " +
                   g_applicationDescription );
 
-            const std::vector< struct argp_option > l_options = {
-                // TODO: Implement
-                { "verbose", 'v', nullptr, 0, "Produce verbose output", 0 },
+            const std::vector< argp_option > l_options = {
+                { "verbose", ( int )parserOption::verbose, nullptr, 0,
+                  "Produce verbose output", 0 },
                 { "quiet", ( int )parserOption::quiet, nullptr, 0,
                   "Suppress all non-error output", 0 },
                 { "dry-run", ( int )parserOption::dryRun, nullptr, 0,
@@ -264,9 +276,8 @@ auto parseArguments( int _argumentCount, char** _argumentVector ) -> bool {
                 { "disable-default-system-includes",
                   ( int )parserOption::disableDefaultSystemIncludes, nullptr, 0,
                   "Disable default system include paths", 2 },
-                // TODO: Implement
-                { "warnings-as-errors", 'W', nullptr, 0,
-                  "Treat all warnings as errors", 2 },
+                { "warnings-as-errors", ( int )parserOption::warningsAsErrors,
+                  nullptr, 0, "Treat all warnings as errors", 2 },
                 // TODO: Implement
                 { "no-warnings", 0, nullptr, 0, "Suppress warnings", 2 },
                 { "check-only", ( int )parserOption::checkOnly, nullptr, 0,
