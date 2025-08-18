@@ -1,9 +1,8 @@
 #include "iterate_arguments.hpp"
 
-#include <clang/Lex/Lexer.h>
-
 #include <memory>
 
+#include "common_ast_handlers.hpp"
 #include "log.hpp"
 #include "trace.hpp"
 
@@ -19,7 +18,6 @@ IterateArgumentsHandler::IterateArgumentsHandler( clang::Rewriter& _rewriter )
 void IterateArgumentsHandler::run( const MatchFinder::MatchResult& _result ) {
     traceEnter();
 
-    clang::SourceManager& l_sourceManager = *_result.SourceManager;
     clang::LangOptions l_langOptions = _result.Context->getLangOpts();
 
     const auto* l_callingExpression =
@@ -58,159 +56,75 @@ void IterateArgumentsHandler::run( const MatchFinder::MatchResult& _result ) {
             goto EXIT;
         }
 
-        std::string l_replacementText;
+        const std::string l_replacementText = common::buildReplacementText(
+            _rewriter, l_callingExpression,
+            l_ancestorFunctionDeclaration->parameters(),
+            [ & ]( const clang::ParmVarDecl* _argumentDeclaration,
+                   llvm::raw_string_ostream& _replacementTextStringStream,
+                   const clang::StringRef _indent ) {
+                traceEnter();
 
-        // Build replacement text
-        {
-            // Determine indentation from call location
-            // Use spelling loc for column
-            const clang::SourceLocation l_sourceStartLocation =
-                l_sourceManager.getSpellingLoc(
-                    l_callingExpression->getBeginLoc() );
-            unsigned l_spellingColumnNumber =
-                l_sourceManager.getSpellingColumnNumber(
-                    l_sourceStartLocation );
-            l_spellingColumnNumber = ( ( l_spellingColumnNumber > 0 )
-                                           ? ( l_spellingColumnNumber - 1 )
-                                           : ( 0 ) );
-            const std::string l_indent( l_spellingColumnNumber, ' ' );
-
-            llvm::raw_string_ostream l_replacementTextStringStream(
-                l_replacementText );
-
-            for ( const clang::ParmVarDecl* l_argument :
-                  l_ancestorFunctionDeclaration->parameters() ) {
-                const std::string l_argumentName =
-                    l_argument->getNameAsString();
-
-                logVariable( l_argumentName );
-
-                if ( l_argumentName.empty() ) {
-                    logError( "Argument has no name; skipping" );
-
-                    continue;
+                if ( ( !_argumentDeclaration ) ||
+                     ( !_argumentDeclaration->getIdentifier() ) ) {
+                    goto EXIT;
                 }
 
-                std::string l_argumentTypeString;
-
-                // Build argument type string
                 {
-                    clang::QualType l_argumentType = l_argument->getType();
+                    const std::string l_argumentName =
+                        _argumentDeclaration->getNameAsString();
 
-                    const auto* l_typedefType =
-                        l_argumentType->getAs< clang::TypedefType >();
+                    logVariable( l_argumentName );
 
-                    if ( l_typedefType ) {
-                        l_argumentTypeString =
-                            l_typedefType->getDecl()->getNameAsString();
+                    if ( l_argumentName.empty() ) {
+                        logError( "Argument has no name; skipping" );
 
-                    } else {
-                        l_argumentTypeString = l_argumentType.getAsString();
+                        goto EXIT;
                     }
+
+                    std::string l_argumentTypeString;
+
+                    // Build argument type string
+                    {
+                        clang::QualType l_argumentType =
+                            _argumentDeclaration->getType();
+
+                        const auto* l_typedefType =
+                            l_argumentType->getAs< clang::TypedefType >();
+
+                        if ( l_typedefType ) {
+                            l_argumentTypeString =
+                                l_typedefType->getDecl()->getNameAsString();
+
+                        } else {
+                            l_argumentTypeString = l_argumentType.getAsString();
+                        }
+                    }
+
+                    logVariable( l_argumentName );
+
+                    const std::string l_argumentReference =
+                        ( "&(" + l_argumentName + ")" );
+
+                    // callbackName(
+                    //   "argumentName",
+                    //   "argumentType",
+                    //   sizeof( argumentName );
+                    _replacementTextStringStream
+                        << _indent << l_callbackName << "("
+                        << "\"" << l_argumentName << "\", "
+                        << "\"" << l_argumentTypeString << "\", "
+                        << l_argumentReference << ", " << "sizeof("
+                        << l_argumentName << ")" << ");\n";
                 }
 
-                logVariable( l_argumentName );
-
-                const std::string l_argumentReference =
-                    ( "&(" + l_argumentName + ")" );
-
-                // callbackName(
-                //   "argumentName",
-                //   "argumentType",
-                //   sizeof( argumentName );
-                l_replacementTextStringStream
-                    << l_indent << l_callbackName << "(" << "\""
-                    << l_argumentName << "\", "
-                    << "\"" << l_argumentTypeString << "\", "
-                    << l_argumentReference << ", " << "sizeof("
-                    << l_argumentName << ")" << ");\n";
-            }
-
-            l_replacementTextStringStream.flush();
-
-            l_replacementText.erase( 0, l_indent.length() );
-
-            if ( ( !l_replacementText.empty() ) &&
-                 ( l_replacementText.back() == '\n' ) ) {
-                l_replacementText.pop_back();
-            }
-        }
+            EXIT:
+                traceExit();
+            } );
 
         logVariable( l_replacementText );
 
-        // Replace the entire call (including semicolon) with replacement text
-        {
-            clang::CharSourceRange l_sourceRangeToReplace;
-
-            {
-                const clang::SourceLocation l_sourceEndLocation =
-                    l_callingExpression->getEndLoc();
-                // TODO:Rename
-                const clang::SourceLocation l_lastCharacterSourceLocation =
-                    clang::Lexer::getLocForEndOfToken( l_sourceEndLocation, 0,
-                                                       l_sourceManager,
-                                                       l_langOptions );
-
-                bool l_isSemicolonIncluded = false;
-
-                if ( l_lastCharacterSourceLocation.isValid() ) {
-                    // TODO: Rename
-                    const clang::SourceLocation l_afterSpelling =
-                        l_sourceManager.getSpellingLoc(
-                            l_lastCharacterSourceLocation );
-
-                    if ( l_afterSpelling.isValid() ) {
-                        bool l_isInvalid = false;
-
-                        const char* l_lastCharacter =
-                            l_sourceManager.getCharacterData( l_afterSpelling,
-                                                              &l_isInvalid );
-
-                        if ( ( !l_isInvalid ) && ( l_lastCharacter ) &&
-                             ( *l_lastCharacter == ';' ) ) {
-                            l_isSemicolonIncluded = true;
-                        }
-                    }
-                }
-
-                const clang::SourceLocation l_replacementSourceEndLocation =
-                    ( ( l_isSemicolonIncluded )
-                          ? ( l_lastCharacterSourceLocation.getLocWithOffset(
-                                1 ) )
-                          : ( l_sourceEndLocation ) );
-
-                l_sourceRangeToReplace = clang::CharSourceRange::getCharRange(
-                    l_callingExpression->getBeginLoc(),
-                    l_replacementSourceEndLocation );
-            }
-
-            // FIX: Log this
-            // logVariable( l_sourceRangeToReplace );
-
-            // Only attempt to query rewritten text/ replace if the range is
-            // valid and in main file
-            if ( ( !l_sourceRangeToReplace.isValid() ) ||
-                 ( !_rewriter.getSourceMgr().isWrittenInMainFile(
-                     l_sourceRangeToReplace.getBegin() ) ) ) {
-                logError( "Invalid or non-main file range for rewrite." );
-
-                goto EXIT;
-            }
-
-            _rewriter.ReplaceText( l_sourceRangeToReplace, l_replacementText );
-
-            // Debug existing rewritten text safely
-            const std::string l_existing =
-                _rewriter.getRewrittenText( l_sourceRangeToReplace );
-
-            if ( l_existing.empty() ) {
-                logError(
-                    "Existing rewritten text is empty or not yet rewritten." );
-
-            } else {
-                log( "Existing rewritten text: " + l_existing );
-            }
-        }
+        common::replaceText( _rewriter, l_callingExpression,
+                             l_replacementText );
     }
 
 EXIT:

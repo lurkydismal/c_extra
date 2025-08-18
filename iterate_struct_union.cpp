@@ -1,10 +1,8 @@
 #include "iterate_struct_union.hpp"
 
-#include <clang/Lex/Lexer.h>
-
 #include <memory>
 
-#include "clang/AST/Expr.h"
+#include "common_ast_handlers.hpp"
 #include "log.hpp"
 #include "trace.hpp"
 
@@ -394,181 +392,79 @@ void IterateStructUnionHandler::run( const MatchFinder::MatchResult& _result ) {
 
         logVariable( l_recordTypeString );
 
-        std::string l_replacementText;
+        const std::string l_replacementText = common::buildReplacementText(
+            _rewriter, l_callingExpression,
+            l_recordOriginalDeclaration->fields(),
+            [ & ]( const clang::FieldDecl* _fieldDeclaration,
+                   llvm::raw_string_ostream& _replacementTextStringStream,
+                   const clang::StringRef _indent ) {
+                traceEnter();
 
-        // Build replacement text
-        {
-            // Determine indentation from call location
-            // Use spelling loc for column
-            const clang::SourceLocation l_sourceStartLocation =
-                l_sourceManager.getSpellingLoc(
-                    l_callingExpression->getBeginLoc() );
-            uint l_spellingColumnNumber =
-                l_sourceManager.getSpellingColumnNumber(
-                    l_sourceStartLocation );
-            l_spellingColumnNumber = ( ( l_spellingColumnNumber > 0 )
-                                           ? ( l_spellingColumnNumber - 1 )
-                                           : ( 0 ) );
-            const std::string l_indent( l_spellingColumnNumber, ' ' );
+                if ( ( !_fieldDeclaration ) ||
+                     ( _fieldDeclaration->isUnnamedBitField() ) ||
+                     ( !_fieldDeclaration->getIdentifier() ) ) {
+                    goto EXIT;
+                }
 
-            llvm::raw_string_ostream l_replacementTextStringStream(
-                l_replacementText );
+                {
+                    std::string l_fieldName =
+                        _fieldDeclaration->getNameAsString();
 
-            auto l_appendFieldCallToReplacementText =
-                [ & ]( const clang::FieldDecl* _fieldDeclaration ) {
-                    traceEnter();
+                    logVariable( l_fieldName );
 
-                    if ( ( !_fieldDeclaration ) ||
-                         ( _fieldDeclaration->isUnnamedBitField() ) ||
-                         ( !_fieldDeclaration->getIdentifier() ) ) {
+                    if ( l_fieldName.empty() ) {
                         goto EXIT;
                     }
 
+                    std::string l_fieldType =
+                        _fieldDeclaration->getType().getAsString();
+
+                    logVariable( l_fieldType );
+
+                    std::string l_memberAccess;
+
+                    // Build member access
                     {
-                        std::string l_fieldName =
-                            _fieldDeclaration->getNameAsString();
+                        const std::string l_baseExpressionTextString =
+                            l_baseExpressionText.str();
 
-                        logVariable( l_fieldName );
-
-                        if ( l_fieldName.empty() ) {
-                            goto EXIT;
-                        }
-
-                        std::string l_fieldType =
-                            _fieldDeclaration->getType().getAsString();
-
-                        logVariable( l_fieldType );
-
-                        std::string l_memberAccess;
-
-                        // Build member access
-                        {
-                            const std::string l_baseExpressionTextString =
-                                l_baseExpressionText.str();
-
-                            l_memberAccess =
-                                ( ( l_pointerPassed )
-                                      ? ( "(" + l_baseExpressionTextString +
-                                          ")->" + l_fieldName )
-                                      : ( l_baseExpressionTextString + "." +
-                                          l_fieldName ) );
-                        }
-
-                        const std::string l_fieldReference =
-                            ( "&(" + l_memberAccess + ")" );
-
-                        logVariable( l_fieldReference );
-
-                        // callbackName(
-                        //   "fieldName",
-                        //   "fieldType",
-                        //   &( ( variable )->field ),
-                        //   __builtin_offsetof( structType, field ),
-                        //   sizeof( ( ( structType* )0 )->field ) );
-                        l_replacementTextStringStream
-                            << l_indent << l_callbackName << "(" << "\""
-                            << l_fieldName << "\", \"" << l_fieldType << "\", "
-                            << l_fieldReference << ", "
-                            << "__builtin_offsetof(" << l_recordTypeString
-                            << ", " << l_fieldName << "), "
-                            << "sizeof(((" << l_recordTypeString << "*)0)->"
-                            << l_fieldName << ")" << ");\n";
+                        l_memberAccess =
+                            ( ( l_pointerPassed )
+                                  ? ( "(" + l_baseExpressionTextString + ")->" +
+                                      l_fieldName )
+                                  : ( l_baseExpressionTextString + "." +
+                                      l_fieldName ) );
                     }
 
-                EXIT:
-                    traceExit();
-                };
+                    const std::string l_fieldReference =
+                        ( "&(" + l_memberAccess + ")" );
 
-            for ( const clang::FieldDecl* l_fieldDeclaration :
-                  l_recordOriginalDeclaration->fields() ) {
-                l_appendFieldCallToReplacementText( l_fieldDeclaration );
-            }
+                    logVariable( l_fieldReference );
 
-            l_replacementTextStringStream.flush();
+                    // callbackName(
+                    //   "fieldName",
+                    //   "fieldType",
+                    //   &( ( variable )->field ),
+                    //   __builtin_offsetof( structType, field ),
+                    //   sizeof( ( ( structType* )0 )->field ) );
+                    _replacementTextStringStream
+                        << _indent << l_callbackName << "(" << "\""
+                        << l_fieldName << "\", \"" << l_fieldType << "\", "
+                        << l_fieldReference << ", "
+                        << "__builtin_offsetof(" << l_recordTypeString << ", "
+                        << l_fieldName << "), "
+                        << "sizeof(((" << l_recordTypeString << "*)0)->"
+                        << l_fieldName << ")" << ");\n";
+                }
 
-            l_replacementText.erase( 0, l_indent.length() );
-
-            if ( ( !l_replacementText.empty() ) &&
-                 ( l_replacementText.back() == '\n' ) ) {
-                l_replacementText.pop_back();
-            }
-        }
+            EXIT:
+                traceExit();
+            } );
 
         logVariable( l_replacementText );
 
-        // Replace the entire call (including semicolon) with replacement text
-        {
-            clang::CharSourceRange l_sourceRangeToReplace;
-
-            {
-                const clang::SourceLocation l_sourceEndLocation =
-                    l_callingExpression->getEndLoc();
-                // TODO:Rename
-                const clang::SourceLocation l_lastCharacterSourceLocation =
-                    clang::Lexer::getLocForEndOfToken( l_sourceEndLocation, 0,
-                                                       l_sourceManager,
-                                                       l_langOptions );
-
-                bool l_isSemicolonIncluded = false;
-
-                if ( l_lastCharacterSourceLocation.isValid() ) {
-                    // TODO: Rename
-                    const clang::SourceLocation l_afterSpelling =
-                        l_sourceManager.getSpellingLoc(
-                            l_lastCharacterSourceLocation );
-
-                    if ( l_afterSpelling.isValid() ) {
-                        bool l_isInvalid = false;
-
-                        const char* l_lastCharacter =
-                            l_sourceManager.getCharacterData( l_afterSpelling,
-                                                              &l_isInvalid );
-
-                        if ( ( !l_isInvalid ) && ( l_lastCharacter ) &&
-                             ( *l_lastCharacter == ';' ) ) {
-                            l_isSemicolonIncluded = true;
-                        }
-                    }
-                }
-
-                const clang::SourceLocation l_replacementSourceEndLocation =
-                    ( ( l_isSemicolonIncluded )
-                          ? ( l_lastCharacterSourceLocation.getLocWithOffset(
-                                1 ) )
-                          : ( l_sourceEndLocation ) );
-
-                l_sourceRangeToReplace = clang::CharSourceRange::getCharRange(
-                    l_callingExpression->getBeginLoc(),
-                    l_replacementSourceEndLocation );
-            }
-
-            // FIX: Log this
-            // logVariable( l_sourceRangeToReplace );
-
-            // Only attempt to query rewritten text/ replace if the range is
-            // valid and in main file
-            if ( ( !l_sourceRangeToReplace.isValid() ) ||
-                 ( !_rewriter.getSourceMgr().isWrittenInMainFile(
-                     l_sourceRangeToReplace.getBegin() ) ) ) {
-                logError( "Invalid or non-main file range for rewrite." );
-
-                goto EXIT;
-            }
-
-            _rewriter.ReplaceText( l_sourceRangeToReplace, l_replacementText );
-
-            // Debug existing rewritten text safely
-            const std::string l_existing =
-                _rewriter.getRewrittenText( l_sourceRangeToReplace );
-
-            if ( l_existing.empty() ) {
-                logError(
-                    "Existing rewritten text is empty or not yet rewritten." );
-
-            } else {
-                log( "Existing rewritten text: " + l_existing );
-            }
-        }
+        common::replaceText( _rewriter, l_callingExpression,
+                             l_replacementText );
     }
 
 EXIT:
@@ -581,14 +477,6 @@ void IterateStructUnionHandler::addMatcher( MatchFinder& _matcher,
 
     auto l_handler = std::make_unique< IterateStructUnionHandler >( _rewriter );
 
-    // Canonical record type matcher (handles typedefs/ quals)
-    auto l_isRecordType = qualType( hasCanonicalType( recordType() ) );
-
-    // Helper matchers
-    auto l_pointerToRecord = pointsTo( l_isRecordType );
-    auto l_arrayOfRecord = arrayType( hasElementType( l_isRecordType ) );
-
-    // TODO: Imrpve bind names
     // First-argument possibilities:
     //  - &struct                 -> bind "addressDeclarationReference"
     //  - struct*                 -> bind "pointerDeclarationReference"
@@ -598,38 +486,11 @@ void IterateStructUnionHandler::addMatcher( MatchFinder& _matcher,
     //  expression that yields struct*)
     //  - (struct S*)expression   -> bind "castingReference" and inner nodes if
     //  available
-    auto l_firstArgument = anyOf(
-        // &struct
-        unaryOperator(
-            hasOperatorName( "&" ),
-            hasUnaryOperand( ignoringParenImpCasts(
-                declRefExpr( to( varDecl( hasType( l_isRecordType ) ) ) )
-                    .bind( "addressDeclarationReference" ) ) ) ),
-
-        // struct*
-        ignoringParenImpCasts(
-            declRefExpr( to( varDecl( hasType( l_pointerToRecord ) ) ) )
-                .bind( "pointerDeclarationReference" ) ),
-
-        // Array of struct
-        ignoringParenImpCasts(
-            declRefExpr( to( varDecl( hasType( l_arrayOfRecord ) ) ) )
-                .bind( "arrayDeclarationReference" ) ),
-
-        // getStructPointer()
-        ignoringParenImpCasts( callExpr( hasType( l_pointerToRecord ) )
-                                   .bind( "callingExpressionReference" ) ),
-
-        // (struct S*)expression
-        ignoringParenImpCasts(
-            cStyleCastExpr(
-                hasDestinationType( l_pointerToRecord ),
-                hasSourceExpression( ignoringParenImpCasts( anyOf(
-                    declRefExpr( to( varDecl( hasType( l_isRecordType ) ) ) )
-                        .bind( "castingDeclarationReference" ),
-                    callExpr().bind( "castingCallingExpression" ),
-                    memberExpr().bind( "castingMemberExpression" ) ) ) ) )
-                .bind( "castingReference" ) ) );
+    auto l_firstArgument = anyOf( common::referenceType( recordType() ),
+                                  common::pointerType( recordType() ),
+                                  common::arrayOfType( recordType() ),
+                                  common::getTypePointer( recordType() ),
+                                  common::castType( recordType() ) );
 
     // Match calls to:
     // iterate_struct(&struct, "callback")

@@ -1,9 +1,8 @@
 #include "iterate_enum.hpp"
 
-#include <clang/Lex/Lexer.h>
-
 #include <memory>
 
+#include "common_ast_handlers.hpp"
 #include "log.hpp"
 #include "trace.hpp"
 
@@ -361,7 +360,7 @@ void IterateEnumHandler::run( const MatchFinder::MatchResult& _result ) {
             }
 
             // Underlying integer type of enum
-            std::string l_fieldUnderlyingType;
+            std::string l_enumeratorConstantUnderlyingType;
 
             {
                 const clang::QualType l_underlyingQualifierType =
@@ -371,166 +370,79 @@ void IterateEnumHandler::run( const MatchFinder::MatchResult& _result ) {
                     l_underlyingQualifierType->getAs< clang::TypedefType >();
 
                 if ( l_typedefType ) {
-                    l_fieldUnderlyingType =
+                    l_enumeratorConstantUnderlyingType =
                         l_typedefType->getDecl()->getNameAsString();
 
                 } else {
-                    l_fieldUnderlyingType =
+                    l_enumeratorConstantUnderlyingType =
                         l_underlyingQualifierType.getAsString();
                 }
             }
 
-            logVariable( l_fieldUnderlyingType );
+            logVariable( l_enumeratorConstantUnderlyingType );
 
-            std::string l_replacementText;
+            const std::string l_replacementText = common::buildReplacementText(
+                _rewriter, l_callingExpression,
+                l_enumDeclaration->enumerators(),
+                [ & ]( const clang::EnumConstantDecl*
+                           _enumeratorConstantDeclaration,
+                       llvm::raw_string_ostream& _replacementTextStringStream,
+                       const clang::StringRef _indent ) {
+                    traceEnter();
 
-            // Build replacement text
-            {
-                // Determine indentation from call location
-                // Use spelling loc for column
-                const clang::SourceLocation l_sourceStartLocation =
-                    l_sourceManager.getSpellingLoc(
-                        l_callingExpression->getBeginLoc() );
-                uint l_spellingColumnNumber =
-                    l_sourceManager.getSpellingColumnNumber(
-                        l_sourceStartLocation );
-                l_spellingColumnNumber = ( ( l_spellingColumnNumber > 0 )
-                                               ? ( l_spellingColumnNumber - 1 )
-                                               : ( 0 ) );
-                const std::string l_indent( l_spellingColumnNumber, ' ' );
-
-                llvm::raw_string_ostream l_replacementTextStringStream(
-                    l_replacementText );
-
-                for ( const clang::EnumConstantDecl* l_ec :
-                      l_enumDeclaration->enumerators() ) {
-                    if ( !l_ec || l_ec->getNameAsString().empty() )
-                        continue;
-                    std::string l_fieldName = l_ec->getNameAsString();
-
-                    logVariable( l_fieldName );
-
-                    if ( l_fieldName.empty() ) {
-                        logError( "Field has no name." );
-
+                    if ( !_enumeratorConstantDeclaration ) {
                         goto EXIT;
                     }
 
-                    llvm::APSInt l_fieldValue = l_ec->getInitVal();
+                    {
+                        std::string l_enumeratorConstantName =
+                            _enumeratorConstantDeclaration->getNameAsString();
 
-                    logVariable( l_fieldValue );
+                        logVariable( l_enumeratorConstantName );
 
-                    clang::SmallVector< char > l_fieldValueAsString;
+                        if ( l_enumeratorConstantName.empty() ) {
+                            logError( "enumeratorConstant has no name." );
 
-                    l_fieldValue.toString( l_fieldValueAsString );
-
-                    logVariable( l_fieldValueAsString );
-
-                    // callbackName(
-                    //   "fieldName",
-                    //   "fieldType",
-                    //   fieldValue,
-                    //   sizeof( fieldType ) );
-                    l_replacementTextStringStream
-                        << l_indent << l_callbackName << "(" << "\""
-                        << l_fieldName << "\", "
-                        << "\"" << l_fieldUnderlyingType << "\", "
-                        << "(" << l_fieldUnderlyingType << ")"
-                        << l_fieldValueAsString << ", " << "sizeof("
-                        << l_fieldUnderlyingType << ")" << ");\n";
-                }
-
-                l_replacementTextStringStream.flush();
-
-                // Remove indent on first line and trailing newline
-                l_replacementTextStringStream.flush();
-
-                l_replacementText.erase( 0, l_indent.length() );
-
-                if ( ( !l_replacementText.empty() ) &&
-                     ( l_replacementText.back() == '\n' ) ) {
-                    l_replacementText.pop_back();
-                }
-            }
-            logVariable( l_replacementText );
-
-            // Replace the entire call (including semicolon) with
-            // replacement text
-            {
-                clang::CharSourceRange l_sourceRangeToReplace;
-
-                {
-                    const clang::SourceLocation l_sourceEndLocation =
-                        l_callingExpression->getEndLoc();
-                    // TODO:Rename
-                    const clang::SourceLocation l_lastCharacterSourceLocation =
-                        clang::Lexer::getLocForEndOfToken( l_sourceEndLocation,
-                                                           0, l_sourceManager,
-                                                           l_langOptions );
-
-                    bool l_isSemicolonIncluded = false;
-
-                    if ( l_lastCharacterSourceLocation.isValid() ) {
-                        // TODO: Rename
-                        const clang::SourceLocation l_afterSpelling =
-                            l_sourceManager.getSpellingLoc(
-                                l_lastCharacterSourceLocation );
-
-                        if ( l_afterSpelling.isValid() ) {
-                            bool l_isInvalid = false;
-
-                            const char* l_lastCharacter =
-                                l_sourceManager.getCharacterData(
-                                    l_afterSpelling, &l_isInvalid );
-
-                            if ( ( !l_isInvalid ) && ( l_lastCharacter ) &&
-                                 ( *l_lastCharacter == ';' ) ) {
-                                l_isSemicolonIncluded = true;
-                            }
+                            goto EXIT;
                         }
+
+                        llvm::APSInt l_enumeratorConstantValue =
+                            _enumeratorConstantDeclaration->getInitVal();
+
+                        logVariable( l_enumeratorConstantValue );
+
+                        clang::SmallVector< char >
+                            l_enumeratorConstantValueAsString;
+
+                        l_enumeratorConstantValue.toString(
+                            l_enumeratorConstantValueAsString );
+
+                        logVariable( l_enumeratorConstantValueAsString );
+
+                        // callbackName(
+                        //   "enumeratorConstantName",
+                        //   "enumeratorConstantType",
+                        //   enumeratorConstantValue,
+                        //   sizeof( enumeratorConstantType ) );
+                        _replacementTextStringStream
+                            << _indent << l_callbackName << "(" << "\""
+                            << l_enumeratorConstantName << "\", "
+                            << "\"" << l_enumeratorConstantUnderlyingType
+                            << "\", "
+                            << "(" << l_enumeratorConstantUnderlyingType << ")"
+                            << l_enumeratorConstantValueAsString << ", "
+                            << "sizeof(" << l_enumeratorConstantUnderlyingType
+                            << ")" << ");\n";
                     }
 
-                    const clang::SourceLocation l_replacementSourceEndLocation =
-                        ( ( l_isSemicolonIncluded )
-                              ? ( l_lastCharacterSourceLocation
-                                      .getLocWithOffset( 1 ) )
-                              : ( l_sourceEndLocation ) );
+                EXIT:
+                    traceExit();
+                } );
 
-                    l_sourceRangeToReplace =
-                        clang::CharSourceRange::getCharRange(
-                            l_callingExpression->getBeginLoc(),
-                            l_replacementSourceEndLocation );
-                }
+            logVariable( l_replacementText );
 
-                // FIX: Log this
-                // logVariable( l_sourceRangeToReplace );
-
-                // Only attempt to query rewritten text/ replace if the
-                // range is valid and in main file
-                if ( ( !l_sourceRangeToReplace.isValid() ) ||
-                     ( !_rewriter.getSourceMgr().isWrittenInMainFile(
-                         l_sourceRangeToReplace.getBegin() ) ) ) {
-                    logError( "Invalid or non-main file range for rewrite." );
-
-                    goto EXIT;
-                }
-
-                _rewriter.ReplaceText( l_sourceRangeToReplace,
-                                       l_replacementText );
-
-                // Debug existing rewritten text safely
-                const std::string l_existing =
-                    _rewriter.getRewrittenText( l_sourceRangeToReplace );
-
-                if ( l_existing.empty() ) {
-                    logError(
-                        "Existing rewritten text is empty or not yet "
-                        "rewritten." );
-
-                } else {
-                    log( "Existing rewritten text: " + l_existing );
-                }
-            }
+            common::replaceText( _rewriter, l_callingExpression,
+                                 l_replacementText );
         }
     }
 
@@ -544,13 +456,6 @@ void IterateEnumHandler::addMatcher( MatchFinder& _matcher,
 
     auto l_handler = std::make_unique< IterateEnumHandler >( _rewriter );
 
-    // Canonical enum type matcher (handles typedefs/ quals)
-    auto l_isEnumType = qualType( hasCanonicalType( enumType() ) );
-
-    // Helper matchers
-    auto l_pointerToEnum = pointsTo( l_isEnumType );
-    auto l_arrayOfEnum = arrayType( hasElementType( l_isEnumType ) );
-
     // First-argument possibilities:
     //  - &variable              -> bind "addressDeclarationReference"
     //  - variable*              -> bind "pointerDeclarationReference"
@@ -561,37 +466,9 @@ void IterateEnumHandler::addMatcher( MatchFinder& _matcher,
     //  - (enum S*)expression    -> bind "castingReference" and inner nodes if
     //  available
     auto l_firstArgument = anyOf(
-        // &enum
-        unaryOperator(
-            hasOperatorName( "&" ),
-            hasUnaryOperand( ignoringParenImpCasts(
-                declRefExpr( to( varDecl( hasType( l_isEnumType ) ) ) )
-                    .bind( "addressDeclarationReference" ) ) ) ),
-
-        // enum*
-        ignoringParenImpCasts(
-            declRefExpr( to( varDecl( hasType( l_pointerToEnum ) ) ) )
-                .bind( "pointerDeclarationReference" ) ),
-
-        // Array of enum
-        ignoringParenImpCasts(
-            declRefExpr( to( varDecl( hasType( l_arrayOfEnum ) ) ) )
-                .bind( "arrayDeclarationReference" ) ),
-
-        // getEnumPointer()
-        ignoringParenImpCasts( callExpr( hasType( l_pointerToEnum ) )
-                                   .bind( "callingExpressionReference" ) ),
-
-        // (enum S*)expression
-        ignoringParenImpCasts(
-            cStyleCastExpr(
-                hasDestinationType( l_pointerToEnum ),
-                hasSourceExpression( ignoringParenImpCasts( anyOf(
-                    declRefExpr( to( varDecl( hasType( l_isEnumType ) ) ) )
-                        .bind( "castingDeclarationReference" ),
-                    callExpr().bind( "castingCallingExpression" ),
-                    memberExpr().bind( "castingMemberExpression" ) ) ) ) )
-                .bind( "castingReference" ) ) );
+        common::referenceType( enumType() ), common::pointerType( enumType() ),
+        common::arrayOfType( enumType() ), common::getTypePointer( enumType() ),
+        common::castType( enumType() ) );
 
     // Match calls to iterate_enum(&enum, "callback")
     _matcher.addMatcher(
