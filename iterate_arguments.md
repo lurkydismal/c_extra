@@ -91,8 +91,8 @@ Since 0.1
 ### See Also
 
 <!-- References to related functions. -->
-[_iterate_struct_union_](/SPEC_TEMPLATE.md)
-[_iterate_enum_](/SPEC_TEMPLATE.md)
+[_iterate_struct_union_](/iterate_struct_union.md)
+[_iterate_enum_](/iterate_enum.md)
 
 ### **Notes/ Caveats**
 

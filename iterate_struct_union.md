@@ -1,6 +1,8 @@
 <!-- The full declaration, including return type, name, and parameter list -->
 ```cpp
-FORCE_INLINE void iterate_enum( enum T* _iterable, const char* _callback )
+FORCE_INLINE iterate_struct( struct T* _iterable, const char* _callback )
+FORCE_INLINE iterate_union( union T* _iterable, const char* _callback )
+FORCE_INLINE iterate_struct_union( T* _iterable, const char* _callback )
 ```
 
 ##### Calls `_callback` with every field from `_iterable`
@@ -8,7 +10,7 @@ FORCE_INLINE void iterate_enum( enum T* _iterable, const char* _callback )
 ### **Parameters**
 
 ```cpp
-- _iterable (enum T*): Pointer to variable of type enum T to iterate over.
+- _iterable (struct or union T*): Pointer to variable of type struct or union T to iterate over.
 - _callback (const char*): Callback to call with each field.
 ```
 
@@ -42,47 +44,47 @@ Depends on iterable and callback.
 <!-- How the function handles errors. -->
 <!-- Any `errno` values set. -->
 <!-- Return value conventions (e.g., negative on error). -->
-iterable must be a valid pointer to a `enum`.
+iterable must be a valid pointer to a `struct`.
 On precondition violation processing aborts.
 
 ### **Examples/ Usage**
 
 ```c
-typedef enum MyEnum {
-    a = 'b',
-    item = 4096,
-} MyEnum_t;
+typedef struct {
+    uint8_t* data;
+    size_t size;
+} asset_t;
 
-MyEnum_t l_myEnumVariable;
+asset_t l_asset;
 
-#define MY_ENUM_FORMAT \
+#define ASSET_FORMAT \
     "Field name: '%s'\n" \
     "Field type: '%s'\n" \
-    "Field value: '%d'\n" \
+    "Field offset: '%zu'\n" \
     "Field size: '%zu'\n\n"
 
-#define printMyEnum( _fieldName, _fieldTypeAsString, _fieldValue, _fieldSize ) do { \
-    printf( MY_ENUM_FORMAT, (_fieldName), (_fieldTypeAsString), (_fieldValue), (_fieldSize) );        \
+#define printAsset( _fieldName, _fieldTypeAsString, _fieldReference, _fieldOffset, _fieldSize ) do { \
+    printf( ASSET_FORMAT, (_fieldName), (_fieldTypeAsString), (_fieldOffset), (_fieldSize) );        \
 } while ( 0 )
 
-iterate_struct( &l_myEnumVariable, printMyEnum );
+iterate_struct( &l_asset, printAsset );
 
-#undef MY_ENUM_FORMAT
-#undef printMyEnum
+#undef ASSET_FORMAT
+#undef printAsset
 ```
 
 #### Possible Output
 
 ```c
-Field name: 'b'
-Field type: 'unsigned int'
-Field value: '0'
-Field size: '0'
+Field name: 'data'
+Field type: 'uint8_t*'
+Field offset: '0'
+Field size: '8'
 
-Field name: 'item'
-Field type: 'unsigned int'
-Field value: '0'
-Field size: '0'
+Field name: 'size'
+Field type: 'size_t'
+Field offset: '8'
+Field size: '8'
 ```
 
 ### **Dependencies/ Requirements**
@@ -101,8 +103,8 @@ Since 0.1
 ### See Also
 
 <!-- References to related functions. -->
-[_iterate_struct_union_](/iterate_struct_union.md)
 [_iterate_arguments_](/iterate_arguments.md)
+[_iterate_enum_](/iterate_enum.md)
 
 ### **Notes/ Caveats**
 

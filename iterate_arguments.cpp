@@ -78,52 +78,52 @@ void IterateArgumentsHandler::run( const MatchFinder::MatchResult& _result ) {
             llvm::raw_string_ostream l_replacementTextStringStream(
                 l_replacementText );
 
-            for ( const clang::ParmVarDecl* l_parameter :
+            for ( const clang::ParmVarDecl* l_argument :
                   l_ancestorFunctionDeclaration->parameters() ) {
-                const std::string l_parameterName =
-                    l_parameter->getNameAsString();
+                const std::string l_argumentName =
+                    l_argument->getNameAsString();
 
-                logVariable( l_parameterName );
+                logVariable( l_argumentName );
 
-                if ( l_parameterName.empty() ) {
-                    logError( "Parameter has no name; skipping" );
+                if ( l_argumentName.empty() ) {
+                    logError( "Argument has no name; skipping" );
 
                     continue;
                 }
 
-                std::string l_parameterTypeString;
+                std::string l_argumentTypeString;
 
-                // Build parameter type string
+                // Build argument type string
                 {
-                    clang::QualType l_parameterType = l_parameter->getType();
+                    clang::QualType l_argumentType = l_argument->getType();
 
                     const auto* l_typedefType =
-                        l_parameterType->getAs< clang::TypedefType >();
+                        l_argumentType->getAs< clang::TypedefType >();
 
                     if ( l_typedefType ) {
-                        l_parameterTypeString =
+                        l_argumentTypeString =
                             l_typedefType->getDecl()->getNameAsString();
 
                     } else {
-                        l_parameterTypeString = l_parameterType.getAsString();
+                        l_argumentTypeString = l_argumentType.getAsString();
                     }
                 }
 
-                logVariable( l_parameterName );
+                logVariable( l_argumentName );
 
-                const std::string l_parameterReference =
-                    ( "&(" + l_parameterName + ")" );
+                const std::string l_argumentReference =
+                    ( "&(" + l_argumentName + ")" );
 
                 // callbackName(
-                //   "parameterName",
-                //   "parameterType",
-                //   sizeof( parameterName );
+                //   "argumentName",
+                //   "argumentType",
+                //   sizeof( argumentName );
                 l_replacementTextStringStream
                     << l_indent << l_callbackName << "(" << "\""
-                    << l_parameterName << "\", "
-                    << "\"" << l_parameterTypeString << "\", "
-                    << l_parameterReference << ", " << "sizeof("
-                    << l_parameterName << ")" << ");\n";
+                    << l_argumentName << "\", "
+                    << "\"" << l_argumentTypeString << "\", "
+                    << l_argumentReference << ", " << "sizeof("
+                    << l_argumentName << ")" << ");\n";
             }
 
             l_replacementTextStringStream.flush();
