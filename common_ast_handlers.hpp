@@ -4,6 +4,8 @@
 #include <clang/Lex/Lexer.h>
 #include <clang/Rewrite/Core/Rewriter.h>
 
+#include <tuple>
+
 #include "log.hpp"
 #include "trace.hpp"
 
@@ -11,20 +13,38 @@ namespace ast = clang::ast_matchers;
 
 namespace common {
 
-// Canonical record type matcher (handles typedefs/ quals)
+struct EnumTag {};
+struct RecordTag {};
+
+template < typename Tag >
+struct TypeTraits;
+
+template <>
+struct TypeTraits< RecordTag > {
+    using Type = clang::RecordType;
+    using Decl = clang::RecordDecl;
+};
+
+template <>
+struct TypeTraits< EnumTag > {
+    using Type = clang::EnumType;
+    using Decl = clang::EnumDecl;
+};
+
+// Canonical type matcher (handles typedefs/ quals)
 template < typename MatcherType >
-inline auto isType( MatcherType _type ) {
+inline auto isType( const MatcherType& _type ) {
     return ( qualType( hasCanonicalType( _type ) ) );
 }
 
 // Helper matchers
 template < typename MatcherType >
-inline auto isPointerToType( MatcherType _type ) {
+inline auto isPointerToType( const MatcherType& _type ) {
     return ( pointsTo( isType( _type ) ) );
 }
 
 template < typename MatcherType >
-inline auto isArrayOfType( MatcherType _type ) {
+inline auto isArrayOfType( const MatcherType& _type ) {
     return ( arrayType( hasElementType( isType( _type ) ) ) );
 }
 
@@ -33,14 +53,14 @@ inline auto isArrayOfType( MatcherType _type ) {
 //  - type*                 -> bind "pointerDeclarationReference"
 //  - Array of type         -> bind "arrayDeclarationReference" (decays to
 //  pointer)
-//  - getStructPointer()      -> bind "callingExpressionReference" (call
+//  - getTypePointer()      -> bind "callingExpressionReference" (call
 //  expression that yields type*)
 //  - (type MatcherType*)expression   -> bind "castingReference" and inner nodes
 //  if available
 
 // &type -> bind "addressDeclarationReference"
 template < typename MatcherType >
-auto referenceType( MatcherType _type ) {
+auto referenceType( const MatcherType& _type ) {
     return ( unaryOperator(
         ast::hasOperatorName( "&" ),
         hasUnaryOperand( ignoringParenImpCasts(
@@ -50,7 +70,7 @@ auto referenceType( MatcherType _type ) {
 
 // type* -> bind "pointerDeclarationReference"
 template < typename MatcherType >
-auto pointerType( MatcherType _type ) {
+auto pointerType( const MatcherType& _type ) {
     return ( ignoringParenImpCasts(
         declRefExpr( to( varDecl( hasType( isPointerToType( _type ) ) ) ) )
             .bind( "pointerDeclarationReference" ) ) );
@@ -58,7 +78,7 @@ auto pointerType( MatcherType _type ) {
 
 // Array of type -> bind "arrayDeclarationReference" (decays to pointer)
 template < typename MatcherType >
-auto arrayOfType( MatcherType _type ) {
+auto arrayOfType( const MatcherType& _type ) {
     return ( ignoringParenImpCasts(
         declRefExpr( to( varDecl( hasType( isArrayOfType( _type ) ) ) ) )
             .bind( "arrayDeclarationReference" ) ) );
@@ -67,7 +87,7 @@ auto arrayOfType( MatcherType _type ) {
 // getTypePointer() -> bind "callingExpressionReference" (call expression that
 // yields type*)
 template < typename MatcherType >
-auto getTypePointer( MatcherType _type ) {
+auto getTypePointer( const MatcherType& _type ) {
     return (
         ignoringParenImpCasts( callExpr( hasType( isPointerToType( _type ) ) )
                                    .bind( "callingExpressionReference" ) ) );
@@ -76,7 +96,7 @@ auto getTypePointer( MatcherType _type ) {
 // (type MatcherType*)expression -> bind "castingReference" and inner nodes if
 // available
 template < typename MatcherType >
-auto castType( MatcherType _type ) {
+auto castPointerType( const MatcherType& _type ) {
     return ( ignoringParenImpCasts(
         cStyleCastExpr(
             hasDestinationType( isPointerToType( _type ) ),
@@ -88,6 +108,36 @@ auto castType( MatcherType _type ) {
             .bind( "castingReference" ) ) );
 }
 
+template < typename MatcherType >
+auto anyReference( const MatcherType& _type ) {
+    return ( anyOf( common::referenceType( _type ),
+                    common::pointerType( _type ), common::arrayOfType( _type ),
+                    common::getTypePointer( _type ),
+                    common::castPointerType( _type ) ) );
+}
+
+template < typename QualifierType >
+auto buildUnderlyingTypeString( QualifierType _qualifierType ) -> std::string {
+    traceEnter();
+
+    std::string l_returnValue;
+
+    const auto* l_typedefType =
+        _qualifierType->template getAs< clang::TypedefType >();
+
+    // Extract typedef
+    if ( l_typedefType ) {
+        l_returnValue = l_typedefType->getDecl()->getNameAsString();
+
+    } else {
+        l_returnValue = _qualifierType.getAsString();
+    }
+
+    traceExit();
+
+    return ( l_returnValue );
+}
+
 // Build replacement text
 template < typename Range, typename Builder >
 auto buildReplacementText( const clang::Rewriter& _rewriter,
@@ -96,40 +146,39 @@ auto buildReplacementText( const clang::Rewriter& _rewriter,
                            Builder&& _builder ) -> std::string {
     traceEnter();
 
-    std::string l_replacementText;
+    std::string l_returnValue;
 
     const clang::SourceManager& l_sourceManager = _rewriter.getSourceMgr();
 
     // Determine indentation from call location
     // Use spelling loc for column
     const clang::SourceLocation l_sourceStartLocation =
-        l_sourceManager.getSpellingLoc( _callingExpression->getBeginLoc() );
+        l_sourceManager.getExpansionLoc( _callingExpression->getBeginLoc() );
     unsigned l_spellingColumnNumber =
-        l_sourceManager.getSpellingColumnNumber( l_sourceStartLocation );
+        l_sourceManager.getExpansionColumnNumber( l_sourceStartLocation );
     l_spellingColumnNumber =
         ( ( l_spellingColumnNumber > 0 ) ? ( l_spellingColumnNumber - 1 )
                                          : ( 0 ) );
-    const std::string l_indent( l_spellingColumnNumber, ' ' );
+    const std::string l_indentation( l_spellingColumnNumber, ' ' );
 
-    llvm::raw_string_ostream l_replacementTextStringStream( l_replacementText );
+    llvm::raw_string_ostream l_replacementTextStringStream( l_returnValue );
 
     for ( const auto* l_declaration : _range ) {
         std::forward< Builder >( _builder )(
-            l_declaration, l_replacementTextStringStream, l_indent );
+            l_declaration, l_replacementTextStringStream, l_indentation );
     }
 
     l_replacementTextStringStream.flush();
 
-    l_replacementText.erase( 0, l_indent.length() );
+    l_returnValue.erase( 0, l_indentation.length() );
 
-    if ( ( !l_replacementText.empty() ) &&
-         ( l_replacementText.back() == '\n' ) ) {
-        l_replacementText.pop_back();
+    if ( ( !l_returnValue.empty() ) && ( l_returnValue.back() == '\n' ) ) {
+        l_returnValue.pop_back();
     }
 
     traceExit();
 
-    return ( l_replacementText );
+    return ( l_returnValue );
 }
 
 // Replace the entire call (including semicolon) with replacement text
@@ -155,14 +204,15 @@ static void replaceText( clang::Rewriter& _rewriter,
 
         if ( l_lastCharacterSourceLocation.isValid() ) {
             // TODO: Rename
-            const clang::SourceLocation l_afterSpelling =
-                l_sourceManager.getSpellingLoc( l_lastCharacterSourceLocation );
+            const clang::SourceLocation l_afterExpansion =
+                l_sourceManager.getExpansionLoc(
+                    l_lastCharacterSourceLocation );
 
-            if ( l_afterSpelling.isValid() ) {
+            if ( l_afterExpansion.isValid() ) {
                 bool l_isInvalid = false;
 
                 const char* l_lastCharacter = l_sourceManager.getCharacterData(
-                    l_afterSpelling, &l_isInvalid );
+                    l_afterExpansion, &l_isInvalid );
 
                 if ( ( !l_isInvalid ) && ( l_lastCharacter ) &&
                      ( *l_lastCharacter == ';' ) ) {
@@ -182,6 +232,10 @@ static void replaceText( clang::Rewriter& _rewriter,
 
     // FIX: Log this
     // logVariable( l_sourceRangeToReplace );
+    log( "BeginLoc: " + l_sourceRangeToReplace.getBegin().printToString(
+                            _rewriter.getSourceMgr() ) );
+    log( "EndLoc: " + l_sourceRangeToReplace.getEnd().printToString(
+                          _rewriter.getSourceMgr() ) );
 
     // Only attempt to query rewritten text/ replace if the range is
     // valid and in main file
@@ -201,16 +255,388 @@ static void replaceText( clang::Rewriter& _rewriter,
             _rewriter.getRewrittenText( l_sourceRangeToReplace );
 
         if ( l_existing.empty() ) {
-            logError(
-                "Existing rewritten text is empty or not yet rewritten." );
+            logError( "Rewritten text is empty or not yet rewritten." );
 
         } else {
-            log( "Existing rewritten text: " + l_existing );
+            log( "Rewritten text: " + l_existing );
         }
     }
 
 EXIT:
     traceExit();
+}
+
+template < typename Tag, typename Checker >
+auto myFunction( const ast::MatchFinder::MatchResult& _result,
+                 const clang::StringRef _callName,
+                 Checker&& _checker )
+    -> std::tuple< const clang::CallExpr*,
+                   const clang::QualType,
+                   const typename TypeTraits< Tag >::Decl*,
+                   const clang::StringRef,
+                   const bool,
+                   const clang::StringRef > {
+    traceEnter();
+
+    using Type = typename TypeTraits< Tag >::Type;
+    using Decl = typename TypeTraits< Tag >::Decl;
+
+    clang::QualType l_returnedQualifierType;
+    Decl* l_originalDeclaration = nullptr;
+    clang::StringRef l_baseExpressionText;
+    bool l_pointerPassed = false;
+    clang::StringRef l_callbackName;
+
+    const clang::SourceManager& l_sourceManager = *( _result.SourceManager );
+    const clang::LangOptions l_langOptions = _result.Context->getLangOpts();
+
+    // Helper: get token-range source text for an Expr, fallback on '_fallback'
+    auto l_getSourceTextOrFallback =
+        [ & ]( const clang::Expr* _expression,
+               const clang::StringRef _fallbackResult ) -> clang::StringRef {
+        traceEnter();
+
+        clang::StringRef l_returnValue = _fallbackResult;
+
+        if ( !_expression ) {
+            goto EXIT;
+        }
+
+        {
+            clang::CharSourceRange l_sourceRange =
+                clang::CharSourceRange::getTokenRange(
+                    _expression->getSourceRange() );
+
+            if ( !l_sourceRange.isValid() ) {
+                goto EXIT;
+            }
+
+            clang::Expected< clang::StringRef > l_sourceText =
+                clang::Lexer::getSourceText( l_sourceRange, l_sourceManager,
+                                             l_langOptions );
+
+            if ( l_sourceText ) {
+                l_returnValue = l_sourceText.get();
+            }
+        }
+
+    EXIT:
+        traceExit();
+
+        return ( l_returnValue );
+    };
+
+    // Helper: extract the underlying QualType from a VarDecl.
+    // NOTE: If pointerPassed==true, try to return pointee type.
+    auto l_getQalifierTypeFromVariable =
+        [ & ]( const clang::VarDecl* _variableDeclaration,
+               const bool _pointerPassed ) -> clang::QualType {
+        traceEnter();
+
+        clang::QualType l_returnValue = {};
+
+        if ( !_variableDeclaration ) {
+            goto EXIT;
+        }
+
+        {
+            clang::QualType l_qualifierType = _variableDeclaration->getType();
+
+            l_returnValue = l_qualifierType.getUnqualifiedType();
+
+            if ( _pointerPassed ) {
+                if ( l_qualifierType->isPointerType() ) {
+                    l_returnValue =
+                        l_qualifierType->getPointeeType().getUnqualifiedType();
+                }
+
+                auto* l_referenceType =
+                    l_qualifierType->getAs< clang::ReferenceType >();
+
+                if ( l_referenceType ) {
+                    l_returnValue =
+                        l_referenceType->getPointeeType().getUnqualifiedType();
+                }
+            }
+        }
+
+    EXIT:
+        traceExit();
+
+        return ( l_returnValue );
+    };
+
+    const auto* l_callingExpression =
+        _result.Nodes.getNodeAs< clang::CallExpr >( _callName );
+
+    logVariable( l_callingExpression );
+
+    if ( !l_callingExpression ) {
+        goto EXIT;
+    }
+
+    {
+        // 2nd argument
+        const auto* l_callbackNameLiteral =
+            _result.Nodes.getNodeAs< clang::StringLiteral >( "callbackName" );
+
+        logVariable( l_callbackNameLiteral );
+
+        if ( !l_callbackNameLiteral ) {
+            goto EXIT;
+        }
+
+        l_callbackName = l_callbackNameLiteral->getString();
+
+        logVariable( l_callbackName );
+
+        // 1st argument
+        const auto* l_addressDeclarationReference =
+            _result.Nodes.getNodeAs< clang::DeclRefExpr >(
+                "addressDeclarationReference" );
+        const auto* l_pointerDeclarationReference =
+            _result.Nodes.getNodeAs< clang::DeclRefExpr >(
+                "pointerDeclarationReference" );
+        const auto* l_arrayDeclarationReference =
+            _result.Nodes.getNodeAs< clang::DeclRefExpr >(
+                "arrayDeclarationReference" );
+        const auto* l_callingExpressionReference =
+            _result.Nodes.getNodeAs< clang::CallExpr >(
+                "callingExpressionReference" );
+
+        const auto* l_castingReference =
+            _result.Nodes.getNodeAs< clang::CStyleCastExpr >(
+                "castingReference" );
+        const auto* l_castingDeclarationReference =
+            _result.Nodes.getNodeAs< clang::DeclRefExpr >(
+                "castingDeclarationReference" );
+        const auto* l_castingCallingExpression =
+            _result.Nodes.getNodeAs< clang::CallExpr >(
+                "castingCallingExpression" );
+        const auto* l_castingMemberExpression =
+            _result.Nodes.getNodeAs< clang::MemberExpr >(
+                "castingMemberExpression" );
+
+        const clang::VarDecl* l_variableDeclaration = nullptr;
+
+        logVariable( l_variableDeclaration );
+
+        auto l_extractDeclarationContext =
+            [ & ]( const clang::DeclRefExpr* _declarationReference,
+                   const bool _pointerPassed ) {
+                traceEnter();
+
+                l_variableDeclaration = llvm::dyn_cast< clang::VarDecl >(
+                    _declarationReference->getDecl() );
+
+                logVariable( l_variableDeclaration );
+
+                if ( !l_variableDeclaration ) {
+                    logError( "Does not refer to a VarDecl" );
+
+                    goto EXIT;
+                }
+
+                l_baseExpressionText = l_getSourceTextOrFallback(
+                    _declarationReference,
+                    l_variableDeclaration->getNameAsString() );
+
+                logVariable( l_baseExpressionText );
+
+                l_returnedQualifierType = l_getQalifierTypeFromVariable(
+                    l_variableDeclaration, l_pointerPassed );
+
+                logVariable( l_returnedQualifierType );
+
+            EXIT:
+                traceExit();
+            };
+
+        // Order of precedence: &tyoe, type*, array of type,
+        // getTypePointer(), (type T*)expression (if casted from declref),
+        // (type T*)expression.
+        if ( l_addressDeclarationReference ) {
+            // &var  -> base is var, pointerPassed = false
+            l_pointerPassed = false;
+
+            l_extractDeclarationContext( l_addressDeclarationReference,
+                                         l_pointerPassed );
+
+        } else if ( l_pointerDeclarationReference ) {
+            // Pointer variable passed -> base is var, pointerPassed = true
+            l_pointerPassed = true;
+
+            l_extractDeclarationContext( l_pointerDeclarationReference,
+                                         l_pointerPassed );
+
+        } else if ( l_arrayDeclarationReference ) {
+            // Array variable passed (decays to pointer)
+            l_pointerPassed = true;
+
+            l_extractDeclarationContext( l_arrayDeclarationReference,
+                                         l_pointerPassed );
+
+            // Extract element type from array type
+            const clang::Type* l_variableDeclarationType =
+                l_variableDeclaration->getType().getTypePtrOrNull();
+
+            if ( l_variableDeclarationType ) {
+                const auto* l_arrayType = llvm::dyn_cast< clang::ArrayType >(
+                    l_variableDeclarationType );
+
+                if ( l_arrayType ) {
+                    l_returnedQualifierType =
+                        l_arrayType->getElementType().getUnqualifiedType();
+
+                    logVariable( l_returnedQualifierType );
+                }
+            }
+
+        } else if ( l_callingExpressionReference ) {
+            // Call expression that returns type*
+            l_pointerPassed = true;
+
+            l_baseExpressionText =
+                l_getSourceTextOrFallback( l_callingExpressionReference, "" );
+
+            logVariable( l_baseExpressionText );
+
+            const clang::QualType l_qualifierType =
+                l_callingExpressionReference->getType();
+
+            if ( l_qualifierType.isNull() ) {
+                logError( "TODO: WRITE" );
+
+                goto EXIT;
+            }
+
+            l_returnedQualifierType =
+                l_qualifierType->getPointeeType().getUnqualifiedType();
+
+            logVariable( l_qualifierType );
+
+        } else if ( l_castingReference ) {
+            // Explicit cast to type*
+            // We matched hasDestinationType(pointer-to-type))
+            l_pointerPassed = true;
+
+            // Destination type's pointee is the type
+            clang::QualType l_castingDestinationQualifierType =
+                l_castingReference->getType();
+
+            if ( l_castingDestinationQualifierType.isNull() ) {
+                logError( "TODO: WRITE2" );
+
+                goto EXIT;
+            }
+
+            l_returnedQualifierType =
+                l_castingDestinationQualifierType->getPointeeType()
+                    .getUnqualifiedType();
+
+            logVariable( l_returnedQualifierType );
+
+            bool l_found = false;
+
+            // Prefer a bound inner decl
+            if ( l_castingDeclarationReference ) {
+                l_variableDeclaration = llvm::dyn_cast< clang::VarDecl >(
+                    l_castingDeclarationReference->getDecl() );
+
+                logVariable( l_variableDeclaration );
+
+                if ( l_variableDeclaration ) {
+                    l_baseExpressionText = l_getSourceTextOrFallback(
+                        l_castingDeclarationReference,
+                        l_variableDeclaration->getNameAsString() );
+
+                    logVariable( l_baseExpressionText );
+
+                    l_found = true;
+                }
+            }
+
+            // Else if casted - from call expression
+            if ( !l_found && l_castingCallingExpression ) {
+                l_baseExpressionText =
+                    l_getSourceTextOrFallback( l_castingCallingExpression, "" );
+
+                l_found = !l_baseExpressionText.empty();
+            }
+
+            // Else if casted - from member expression
+            if ( !l_found && l_castingMemberExpression ) {
+                l_baseExpressionText =
+                    l_getSourceTextOrFallback( l_castingMemberExpression, "" );
+
+                l_found = !l_baseExpressionText.empty();
+            }
+
+            // As a final fallback, use the whole cast expression text
+            if ( !l_found ) {
+                l_baseExpressionText =
+                    l_getSourceTextOrFallback( l_castingReference, "" );
+
+                l_found = !l_baseExpressionText.empty();
+            }
+
+            logVariable( l_baseExpressionText );
+
+        } else {
+            // Nothing matched
+            // Should not happen if matcher and bindings are correct
+            logError( "No matching first-argument pattern found." );
+
+            goto EXIT;
+        }
+
+        if ( l_returnedQualifierType.isNull() ) {
+            logError( "Type is null." );
+
+            goto EXIT;
+        }
+
+        // NOTE: Messages are reported by checker
+        if ( !std::forward< Checker >( _checker )( l_returnedQualifierType ) ) {
+            goto EXIT;
+        }
+
+        const Type* l_type = l_returnedQualifierType->getAs< Type >();
+
+        if ( !l_type ) {
+            logError( "Type cast failed." );
+
+            goto EXIT;
+        }
+
+        l_originalDeclaration = l_type->getOriginalDecl();
+
+        logVariable( l_originalDeclaration );
+
+        if ( !l_originalDeclaration ) {
+            logError( "Original DeclarationType missing." );
+
+            goto EXIT;
+        }
+
+        l_originalDeclaration = l_originalDeclaration->getDefinition();
+
+        logVariable( l_originalDeclaration );
+
+        if ( !l_originalDeclaration ) {
+            logError( std::string( "Type has no definition (forward-decl): " ) +
+                      l_variableDeclaration->getNameAsString() );
+
+            goto EXIT;
+        }
+    }
+
+EXIT:
+    traceExit();
+
+    return { l_callingExpression,   l_returnedQualifierType,
+             l_originalDeclaration, l_baseExpressionText,
+             l_pointerPassed,       l_callbackName };
 }
 
 } // namespace common
