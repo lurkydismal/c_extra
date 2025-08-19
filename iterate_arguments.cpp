@@ -18,8 +18,6 @@ IterateArgumentsHandler::IterateArgumentsHandler( clang::Rewriter& _rewriter )
 void IterateArgumentsHandler::run( const MatchFinder::MatchResult& _result ) {
     traceEnter();
 
-    clang::LangOptions l_langOptions = _result.Context->getLangOpts();
-
     const auto* l_callingExpression =
         _result.Nodes.getNodeAs< clang::CallExpr >( "iterateArgumentsCall" );
 
@@ -76,7 +74,7 @@ void IterateArgumentsHandler::run( const MatchFinder::MatchResult& _result ) {
                     logVariable( l_argumentName );
 
                     if ( l_argumentName.empty() ) {
-                        logError( "Argument has no name; skipping" );
+                        logWarning( "Argument has no name; skipping" );
 
                         goto EXIT;
                     }

@@ -84,22 +84,23 @@ static inline auto writeToFile( const clang::StringRef _filePath,
 
     std::error_code l_errorCode;
 
-    llvm::raw_fd_ostream l_outputFile( _filePath, l_errorCode,
-                                       llvm::sys::fs::OF_None );
+    // TODO: Improve
+    if ( g_needOnlyPrintResult ) {
+        _rewriter.getEditBuffer( _fileId ).write( llvm::outs() );
 
-    l_returnValue = !( l_errorCode );
+    } else {
+        llvm::raw_fd_ostream l_outputFile( _filePath, l_errorCode,
+                                           llvm::sys::fs::OF_None );
 
-    if ( !l_returnValue ) {
-        logError( l_errorCode.message() );
+        l_returnValue = !( l_errorCode );
 
-        goto EXIT;
-    }
+        if ( !l_returnValue ) {
+            logError( l_errorCode.message() );
 
-    {
-        llvm::raw_fd_ostream& l_outputStream =
-            ( ( g_needOnlyPrintResult ) ? ( llvm::outs() ) : ( l_outputFile ) );
+            goto EXIT;
+        }
 
-        _rewriter.getEditBuffer( _fileId ).write( l_outputStream );
+        _rewriter.getEditBuffer( _fileId ).write( l_outputFile );
     }
 
 EXIT:
