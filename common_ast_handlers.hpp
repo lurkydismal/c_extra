@@ -266,10 +266,31 @@ EXIT:
     traceExit();
 }
 
+// Finds a CallExpr bound to _callName and extracts the underlying QualType
+// for the first argument passed to the callback.
+// Handles forms:
+//   &var, var (pointer), array (decays to pointer), call returning pointer,
+//   explicit C-style cast (from declref/ call/ member/ cast).
+//
+// Returns tuple:
+//  ( calling CallExpr*,
+//    resolved QualType,
+//    original Type declaration (definition if available),
+//    base expression text (source snippet),
+//    whether a pointer was passed,
+//    callback name )
+//
+// Error handling:
+//   The function does not throw or return error codes.
+//   Instead, any error results in some tuple elements being invalid:
+//     - CallExpr* == nullptr       → no matching call expression
+//     - QualType.isNull()          → type could not be resolved
+//     - Decl* == nullptr           → original declaration missing
+//     - base expression text empty → could not resolve source text
 template < typename Tag, typename Checker >
-auto myFunction( const ast::MatchFinder::MatchResult& _result,
-                 const clang::StringRef _callName,
-                 Checker&& _checker )
+auto inferCallbackArgumentContext( const ast::MatchFinder::MatchResult& _result,
+                                   const clang::StringRef _callName,
+                                   Checker&& _checker )
     -> std::tuple< const clang::CallExpr*,
                    const clang::QualType,
                    const typename TypeTraits< Tag >::Decl*,
@@ -432,7 +453,7 @@ auto myFunction( const ast::MatchFinder::MatchResult& _result,
                 logVariable( l_variableDeclaration );
 
                 if ( !l_variableDeclaration ) {
-                    logError( "Does not refer to a VarDecl" );
+                    logError( "First argument is not a VarDecl." );
 
                     goto EXIT;
                 }
@@ -505,7 +526,7 @@ auto myFunction( const ast::MatchFinder::MatchResult& _result,
                 l_callingExpressionReference->getType();
 
             if ( l_qualifierType.isNull() ) {
-                logError( "TODO: WRITE" );
+                logError( "Call expression has null type." );
 
                 goto EXIT;
             }
@@ -525,7 +546,7 @@ auto myFunction( const ast::MatchFinder::MatchResult& _result,
                 l_castingReference->getType();
 
             if ( l_castingDestinationQualifierType.isNull() ) {
-                logError( "TODO: WRITE2" );
+                logError( "Cast has null destination type." );
 
                 goto EXIT;
             }
@@ -585,13 +606,13 @@ auto myFunction( const ast::MatchFinder::MatchResult& _result,
         } else {
             // Nothing matched
             // Should not happen if matcher and bindings are correct
-            logError( "No matching first-argument pattern found." );
+            logError( "First-argument pattern not matched." );
 
             goto EXIT;
         }
 
         if ( l_returnedQualifierType.isNull() ) {
-            logError( "Type is null." );
+            logError( "Resolved qualifier type is null." );
 
             goto EXIT;
         }
@@ -604,7 +625,7 @@ auto myFunction( const ast::MatchFinder::MatchResult& _result,
         const Type* l_type = l_returnedQualifierType->getAs< Type >();
 
         if ( !l_type ) {
-            logError( "Type cast failed." );
+            logError( "Failed to cast QualType to expected Type." );
 
             goto EXIT;
         }
@@ -614,7 +635,7 @@ auto myFunction( const ast::MatchFinder::MatchResult& _result,
         logVariable( l_originalDeclaration );
 
         if ( !l_originalDeclaration ) {
-            logError( "Original DeclarationType missing." );
+            logError( "Original declaration missing on type." );
 
             goto EXIT;
         }
@@ -624,7 +645,7 @@ auto myFunction( const ast::MatchFinder::MatchResult& _result,
         logVariable( l_originalDeclaration );
 
         if ( !l_originalDeclaration ) {
-            logError( std::string( "Type has no definition (forward-decl): " ) +
+            logError( std::string( "No definition for type (forward-decl): " ) +
                       l_variableDeclaration->getNameAsString() );
 
             goto EXIT;

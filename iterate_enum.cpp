@@ -20,7 +20,7 @@ void IterateEnumHandler::run( const MatchFinder::MatchResult& _result ) {
 
     auto [ l_callingExpression, l_qualifierType, l_originalDeclaration,
            l_baseExpressionText, l_pointerPassed, l_callbackName ] =
-        common::myFunction< common::EnumTag >(
+        common::inferCallbackArgumentContext< common::EnumTag >(
             _result, "iterateEnumCall",
             []( const clang::QualType& _qualifierType ) -> bool {
                 traceEnter();

@@ -22,7 +22,7 @@ void IterateStructUnionHandler::run( const MatchFinder::MatchResult& _result ) {
     auto [ l_callingExpression, l_recordQualifierType,
            l_recordOriginalDeclaration, l_baseExpressionText, l_pointerPassed,
            l_callbackName ] =
-        common::myFunction< common::RecordTag >(
+        common::inferCallbackArgumentContext< common::RecordTag >(
             _result, "iterateStructUnionCall",
             []( const clang::QualType& _qualifierType ) {
                 traceEnter();
