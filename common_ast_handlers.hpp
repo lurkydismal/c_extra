@@ -189,8 +189,10 @@ static void replaceText( clang::Rewriter& _rewriter,
 
     clang::CharSourceRange l_sourceRangeToReplace;
 
+    const clang::SourceManager& l_sourceManager = _rewriter.getSourceMgr();
+
+    // Build source range to replace
     {
-        const clang::SourceManager& l_sourceManager = _rewriter.getSourceMgr();
         const clang::LangOptions& l_langOptions = _rewriter.getLangOpts();
 
         const clang::SourceLocation l_sourceEndLocation =
@@ -228,10 +230,12 @@ static void replaceText( clang::Rewriter& _rewriter,
 
         l_sourceRangeToReplace = clang::CharSourceRange::getCharRange(
             _callingExpression->getBeginLoc(), l_replacementSourceEndLocation );
+
+        l_sourceRangeToReplace = clang::CharSourceRange::getCharRange(
+            l_sourceManager.getFileLoc( _callingExpression->getBeginLoc() ),
+            l_sourceManager.getFileLoc( l_sourceEndLocation ) );
     }
 
-    // FIX: Log this
-    // logVariable( l_sourceRangeToReplace );
     log( "BeginLoc: " + l_sourceRangeToReplace.getBegin().printToString(
                             _rewriter.getSourceMgr() ) );
     log( "EndLoc: " + l_sourceRangeToReplace.getEnd().printToString(
@@ -252,7 +256,10 @@ static void replaceText( clang::Rewriter& _rewriter,
 
         // Debug existing rewritten text safely
         const std::string l_existing =
-            _rewriter.getRewrittenText( l_sourceRangeToReplace );
+            _rewriter.getRewrittenText( clang::CharSourceRange::getCharRange(
+                l_sourceManager.getFileLoc( _callingExpression->getBeginLoc() ),
+                l_sourceManager.getFileLoc(
+                    _callingExpression->getEndLoc() ) ) );
 
         if ( l_existing.empty() ) {
             logError( "Rewritten text is empty or not yet rewritten." );
