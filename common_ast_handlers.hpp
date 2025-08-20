@@ -6,6 +6,8 @@
 
 #include <tuple>
 
+#include "common.hpp"
+#include "llvm/Support/raw_ostream.h"
 #include "log.hpp"
 #include "trace.hpp"
 
@@ -236,10 +238,26 @@ static void replaceText( clang::Rewriter& _rewriter,
             l_sourceManager.getFileLoc( l_sourceEndLocation ) );
     }
 
-    log( "BeginLoc: " + l_sourceRangeToReplace.getBegin().printToString(
-                            _rewriter.getSourceMgr() ) );
-    log( "EndLoc: " + l_sourceRangeToReplace.getEnd().printToString(
-                          _rewriter.getSourceMgr() ) );
+    {
+        const clang::CharSourceRange& l_temp = l_sourceRangeToReplace;
+
+        std::string l_sourceRangeToReplace;
+        llvm::raw_string_ostream l_sourceRangeToReplaceStringStream(
+            l_sourceRangeToReplace );
+
+        l_sourceRangeToReplaceStringStream
+            << "[ " << "Begin: " << "\""
+            << _callingExpression->getBeginLoc().printToString(
+                   l_sourceManager )
+            << "\"" << ", End: " << "\""
+            << _callingExpression->getEndLoc().printToString( l_sourceManager )
+            << "\""
+            << " ]";
+
+        l_sourceRangeToReplaceStringStream.flush();
+
+        logVariable( l_sourceRangeToReplace );
+    }
 
     // Only attempt to query rewritten text/ replace if the range is
     // valid and in main file
@@ -251,15 +269,16 @@ static void replaceText( clang::Rewriter& _rewriter,
         goto EXIT;
     }
 
-    {
-        _rewriter.ReplaceText( l_sourceRangeToReplace, _replacementText );
+    _rewriter.ReplaceText( l_sourceRangeToReplace, _replacementText );
 
+    // FIX: When expanded from macro -> always empty or not yet rewritten
+#if 0
         // Debug existing rewritten text safely
+    {
         const std::string l_existing =
-            _rewriter.getRewrittenText( clang::CharSourceRange::getCharRange(
-                l_sourceManager.getFileLoc( _callingExpression->getBeginLoc() ),
-                l_sourceManager.getFileLoc(
-                    _callingExpression->getEndLoc() ) ) );
+            _rewriter.getRewrittenText( l_sourceRangeToReplace );
+
+        logVariable( l_existing );
 
         if ( l_existing.empty() ) {
             logError( "Rewritten text is empty or not yet rewritten." );
@@ -268,6 +287,7 @@ static void replaceText( clang::Rewriter& _rewriter,
             log( "Rewritten text: " + l_existing );
         }
     }
+#endif
 
 EXIT:
     traceExit();
