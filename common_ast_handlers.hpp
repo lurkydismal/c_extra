@@ -183,7 +183,261 @@ auto buildReplacementText( const clang::Rewriter& _rewriter,
     return ( l_returnValue );
 }
 
+// Replace the entire call (including trailing semen/paren if present) with
+// replacement text
+static void replaceText( clang::Rewriter& rewriter,
+                         const clang::CallExpr* callExpr,
+                         const clang::StringRef replacementText ) {
+    traceEnter();
+
+    const clang::SourceManager& SM = rewriter.getSourceMgr();
+    const clang::LangOptions& LO = rewriter.getLangOpts();
+
+    // AST-provided locations (may be in macro spelling/definition)
+    clang::SourceLocation beginLoc = callExpr->getBeginLoc();
+    clang::SourceLocation endLoc = callExpr->getEndLoc();
+
+    // Map to expansion locations (where macro was *used*)
+    clang::SourceLocation beginExp = SM.getExpansionLoc( beginLoc );
+    clang::SourceLocation endExp = SM.getExpansionLoc( endLoc );
+
+    // Compute end-of-token for expansion end (points AFTER the last token)
+    clang::SourceLocation endTokExp =
+        clang::Lexer::getLocForEndOfToken( endExp, /*Offset=*/0, SM, LO );
+    if ( !endTokExp.isValid() ) {
+        logError( "Invalid token end location for rewrite." );
+        traceExit();
+        return;
+    }
+
+    // Convert expansion locations to file locations (locations in the physical
+    // file buffer)
+    clang::SourceLocation fileBegin = SM.getFileLoc( beginExp );
+    clang::SourceLocation fileEnd = SM.getFileLoc( endTokExp );
+    if ( !fileBegin.isValid() || !fileEnd.isValid() ) {
+        logError( "Invalid file begin/end location for rewrite." );
+        traceExit();
+        return;
+    }
+
+    // Sanity: must be same file
+    clang::FileID fileIdBegin = SM.getFileID( fileBegin );
+    clang::FileID fileIdEnd = SM.getFileID( fileEnd );
+    if ( fileIdBegin != fileIdEnd ) {
+        // Don't cross files - bail out (you can choose other behavior)
+        logError(
+            "Replacement would cross file boundaries - skipping rewrite." );
+        traceExit();
+        return;
+    }
+
+    // Look ahead in the file buffer to optionally include a trailing "(...)"
+    // leftover and/or a ';'
+    {
+        // Get buffer and offsets
+        const llvm::StringRef buffer = SM.getBufferData( fileIdEnd );
+        const unsigned startOffset = SM.getFileOffset( fileEnd );
+        unsigned pos = startOffset;
+        const unsigned bufSize = buffer.size();
+
+        // Limit how far we will scan forward to avoid blowing up (change as
+        // needed)
+        const unsigned LOOKAHEAD_LIMIT = 1024; // bytes
+        const unsigned maxPos =
+            std::min< unsigned >( bufSize, startOffset + LOOKAHEAD_LIMIT );
+
+        // Skip whitespace
+        while ( pos < maxPos &&
+                isspace( static_cast< unsigned char >( buffer[ pos ] ) ) )
+            ++pos;
+
+        // If we see '(' then try to consume a balanced parentheses sequence
+        if ( pos < maxPos && buffer[ pos ] == '(' ) {
+            unsigned depth = 0;
+            bool closed = false;
+            while ( pos < maxPos ) {
+                char c = buffer[ pos++ ];
+                if ( c == '(' )
+                    ++depth;
+                else if ( c == ')' ) {
+                    if ( depth == 0 ) {
+                        // unmatched closing paren — treat as end
+                        break;
+                    }
+                    --depth;
+                    if ( depth == 0 ) {
+                        closed = true;
+                        break;
+                    }
+                }
+            }
+            // If we closed parentheses, advance pos past any whitespace and
+            // optional semicolon
+            if ( closed ) {
+                while ( pos < maxPos && isspace( static_cast< unsigned char >(
+                                            buffer[ pos ] ) ) )
+                    ++pos;
+                if ( pos < maxPos && buffer[ pos ] == ';' ) {
+                    ++pos; // include semicolon
+                }
+                // Create new fileEnd location that includes these characters
+                fileEnd = SM.getLocForStartOfFile( fileIdEnd )
+                              .getLocWithOffset( pos );
+            } else {
+                // failed to find matching ')', fallback to including up to next
+                // semicolon (see below)
+                pos = startOffset; // reset to original
+            }
+        }
+
+        // If we didn't include parentheses, try to include a direct semicolon
+        // (common case)
+        if ( fileEnd == SM.getFileLoc( endTokExp ) ) {
+            // skip whitespace
+            unsigned p = pos;
+            while ( p < maxPos &&
+                    isspace( static_cast< unsigned char >( buffer[ p ] ) ) )
+                ++p;
+            if ( p < maxPos && buffer[ p ] == ';' ) {
+                // include the semicolon
+                fileEnd = SM.getLocForStartOfFile( fileIdEnd )
+                              .getLocWithOffset( p + 1 );
+            }
+        }
+    }
+
+    // Build final CharSourceRange to replace
+    clang::CharSourceRange replaceRange =
+        clang::CharSourceRange::getCharRange( fileBegin, fileEnd );
+
+    // Validate the range - must be in main file (or your allowed file)
+    if ( !replaceRange.isValid() ||
+         !SM.isWrittenInMainFile( replaceRange.getBegin() ) ||
+         !SM.isWrittenInMainFile(
+             replaceRange.getEnd().getLocWithOffset( -1 ) ) ) {
+        logError( "Invalid or non-main file range for rewrite." );
+        traceExit();
+        return;
+    }
+
+    // Optional debug log
+    {
+        std::string info;
+        llvm::raw_string_ostream os( info );
+        os << "[ Begin: \"" << callExpr->getBeginLoc().printToString( SM )
+           << "\", End: \"" << callExpr->getEndLoc().printToString( SM )
+           << "\" ]"
+           << " -> file range [" << replaceRange.getBegin().printToString( SM )
+           << " .. " << replaceRange.getEnd().printToString( SM ) << "]";
+        os.flush();
+        logVariable( info );
+    }
+
+    // Do the replacement
+    rewriter.ReplaceText( replaceRange, replacementText );
+
+    traceExit();
+}
+
+// Replace the entire call (including trailing semicolon if present) with
+// replacement text
+#if 0
+static void replaceText( clang::Rewriter& rewriter,
+                         const clang::CallExpr* callExpr,
+                         const clang::StringRef replacementText ) {
+    traceEnter();
+
+    const clang::SourceManager& SM = rewriter.getSourceMgr();
+    const clang::LangOptions& LO = rewriter.getLangOpts();
+
+    // Original begin / end as reported by AST (may be macro-spelling
+    // locations).
+    clang::SourceLocation beginLoc = callExpr->getBeginLoc();
+    clang::SourceLocation endLoc = callExpr->getEndLoc();
+
+    // Map to *expansion* locations (where the macro was used).
+    // If the call is not macro-expanded, getExpansionLoc returns the same loc.
+    clang::SourceLocation beginExp = SM.getExpansionLoc( beginLoc );
+    clang::SourceLocation endExp = SM.getExpansionLoc( endLoc );
+
+    // Get file locations corresponding to the expansion locations.
+    // These are the locations in the file buffer that we can safely ask the
+    // Rewriter to change.
+    clang::SourceLocation fileBegin = SM.getFileLoc( beginExp );
+    if ( !fileBegin.isValid() ) {
+        logError( "Invalid file begin location for rewrite." );
+        traceExit();
+        return;
+    }
+
+    // Compute end-of-token location for the expansion end (points after the
+    // last token).
+    clang::SourceLocation endTokExp =
+        clang::Lexer::getLocForEndOfToken( endExp, /*Offset=*/0, SM, LO );
+    if ( !endTokExp.isValid() ) {
+        logError( "Invalid token end location for rewrite." );
+        traceExit();
+        return;
+    }
+
+    clang::SourceLocation fileEnd = SM.getFileLoc( endTokExp );
+    if ( !fileEnd.isValid() ) {
+        logError( "Invalid file end location for rewrite." );
+        traceExit();
+        return;
+    }
+
+    // Optionally include a following semicolon in the replacement (if present
+    // in the source). fileEnd currently points *after* the last token. Inspect
+    // the character at fileEnd.
+    bool includeSemicolon = false;
+    if ( SM.isWrittenInMainFile( fileEnd ) ) {
+        bool invalid = false;
+        const char* charData = SM.getCharacterData( fileEnd, &invalid );
+        if ( !invalid && charData && *charData == ';' ) {
+            includeSemicolon = true;
+            fileEnd = fileEnd.getLocWithOffset( 1 ); // include the semicolon
+        }
+    }
+
+    // Build the CharSourceRange we will replace.
+    clang::CharSourceRange replaceRange =
+        clang::CharSourceRange::getCharRange( fileBegin, fileEnd );
+
+    // Safety: ensure range is valid and inside main file
+    if ( !replaceRange.isValid() ||
+         !SM.isWrittenInMainFile( replaceRange.getBegin() ) ||
+         !SM.isWrittenInMainFile( replaceRange.getEnd().getLocWithOffset(
+             -1 ) ) ) // ensure last char is in main file
+    {
+        logError( "Invalid or non-main-file range for rewrite." );
+        traceExit();
+        return;
+    }
+
+    // Debug logging (optional)
+    {
+        std::string info;
+        llvm::raw_string_ostream os( info );
+        os << "[ Begin: \"" << callExpr->getBeginLoc().printToString( SM )
+           << "\", End: \"" << callExpr->getEndLoc().printToString( SM )
+           << "\" ]"
+           << " -> file range [" << replaceRange.getBegin().printToString( SM )
+           << " .. " << replaceRange.getEnd().printToString( SM ) << "]";
+        os.flush();
+        logVariable( info );
+    }
+
+    logVariable( replacementText );
+    // Perform replacement
+    rewriter.ReplaceText( replaceRange, replacementText );
+
+    traceExit();
+}
+#endif
+
 // Replace the entire call (including semicolon) with replacement text
+#if 0
 static void replaceText( clang::Rewriter& _rewriter,
                          const clang::CallExpr* _callingExpression,
                          const clang::StringRef _replacementText ) {
@@ -292,6 +546,7 @@ static void replaceText( clang::Rewriter& _rewriter,
 EXIT:
     traceExit();
 }
+#endif
 
 // Finds a CallExpr bound to _callName and extracts the underlying QualType
 // for the first argument passed to the callback.
