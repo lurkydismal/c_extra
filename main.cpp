@@ -132,7 +132,7 @@ auto main( int _argumentCount, char* _argumentVector[] ) -> int {
             ( ( g_isCheckOnly )
                   ? ( clang::tooling::newFrontendActionFactory<
                         clang::SyntaxOnlyAction >() )
-                  // TODO: #for, #repeat
+                  // TODO: #repeat, #regexp
                   // TODO: iterate_struct, iterate_enum, iterate_union,
                   // iterate_arguments, iterate_annotation, iterate_scope
                   // TODO: constinit, consteval, constexpr
